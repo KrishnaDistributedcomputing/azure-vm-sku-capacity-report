@@ -1,0 +1,10 @@
+# Generated reports may contain subscription IDs and quota: never commit them
+*.html
+!docs/*.html
+*.csv
+# Local / editor files
+*.bak
+*.orig*
+.DS_Store
+.vscode/
+backup/

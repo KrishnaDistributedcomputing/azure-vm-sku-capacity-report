@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Mock Azure CLI for testing azure-vm-sku-report.sh
+#   MOCK_LOG=<file>  append every call (to verify the script only runs read-only commands)
+#   MOCK_EVIL=1      add a SKU/subscription with HTML, quotes and CSV-formula payloads (security test)
+[[ -n "${MOCK_LOG:-}" ]] && printf '%q ' "$@" >> "$MOCK_LOG" && echo >> "$MOCK_LOG"
+# Drop "--subscription X" so the case patterns below match
+a=(); while (($#)); do if [[ "$1" == "--subscription" ]]; then shift 2; else a+=("$1"); shift; fi; done; set -- "${a[@]}"
+loc=""; args=("$@"); for ((i=0;i<${#args[@]};i++)); do [[ "${args[i]}" == "--location" ]] && loc="${args[i+1]}"; done
+case "$*" in
+ "account show") echo '{}';;
+ account\ set*) exit 0;;
+ "account show --query name -o tsv") if [[ -n "${MOCK_EVIL:-}" ]]; then echo 'Evil</script><script>alert("sub")</script>'; else echo "${MOCK_SUBNAME:-Contoso-Prod}"; fi;;
+ "account show --query id -o tsv") echo "00000000-1111-2222-3333-444444444444";;
+ account\ list-locations*) printf 'eastus\nwestus\nbrokenregion\n';;
+ vm\ list-skus*)
+  if [[ "$loc" == "westus" ]]; then echo '[]'; exit 0; fi
+  if [[ "$loc" == "brokenregion" ]]; then echo "ERROR: (NoRegisteredProviderFound) mock failure" >&2; exit 1; fi
+  if [[ -n "${MOCK_EVIL:-}" ]]; then cat <<'J'
+[{"name":"Standard_X</script><img src=x onerror=alert(1)>","family":"=HYPERLINK(\"http://evil\",\"x\")","capabilities":[{"name":"vCPUs","value":"2"},{"name":"MemoryGB","value":"4"}],"locationInfo":[{"location":"eastus","zones":["1\"><svg onload=alert(2)>"]}],"restrictions":[{"type":"Location","reasonCode":"<b>x</b>' onmouseover='alert(3)","restrictionInfo":{"locations":["eastus"]}}]},
+ {"name":"+cmd|' /C calc'!A0","family":"@SUM(1+1)","capabilities":[{"name":"vCPUs","value":"2"}],"locationInfo":[{"location":"eastus","zones":["1"]}],"restrictions":[]},
+ {"name":"Standard_Y; rm -rf ~ #<!--<script>","family":"-2+3","capabilities":[{"name":"vCPUs","value":"2"}],"locationInfo":[{"location":"eastus","zones":["1"]}],"restrictions":[]}]
+J
+  exit 0; fi
+  cat <<'J'
+[{"name":"Standard_D4s_v5","family":"standardDSv5Family","capabilities":[{"name":"vCPUs","value":"4"},{"name":"MemoryGB","value":"16"},{"name":"MaxDataDiskCount","value":"8"},{"name":"HyperVGenerations","value":"V1,V2"},{"name":"AcceleratedNetworkingEnabled","value":"True"}],"locationInfo":[{"location":"eastus","zones":["1","2","3"]}],"restrictions":[]},
+ {"name":"Standard_D2s_v5","family":"standardDSv5Family","capabilities":[{"name":"vCPUs","value":"2"},{"name":"MemoryGB","value":"8"}],"locationInfo":[{"location":"eastus","zones":["1","2","3"]}],"restrictions":[]},
+ {"name":"Standard_D16s_v5","family":"standardDSv5Family","capabilities":[{"name":"vCPUs","value":"16"},{"name":"MemoryGB","value":"64"}],"locationInfo":[{"location":"eastus","zones":["1","2","3"]}],"restrictions":[]},
+ {"name":"Standard_E8s_v5","family":"standardESv5Family","capabilities":[{"name":"vCPUs","value":"8"},{"name":"MemoryGB","value":"64"}],"locationInfo":[{"location":"eastus","zones":["1","2","3"]}],"restrictions":[{"type":"Zone","values":["eastus"],"reasonCode":"NotAvailableForSubscription","restrictionInfo":{"locations":["eastus"],"zones":["3"]}}]},
+ {"name":"Standard_D16ds_v4","family":"standardDDSv4Family","capabilities":[{"name":"vCPUs","value":"16"},{"name":"MemoryGB","value":"64"}],"locationInfo":[{"location":"eastus","zones":["1","2","3"]}],"restrictions":[{"type":"Zone","values":["eastus"],"reasonCode":"NotAvailableForSubscription","restrictionInfo":{"locations":["eastus"],"zones":["1","2","3"]}}]},
+ {"name":"Standard_F72s_v2","family":"standardFSv2Family","capabilities":[{"name":"vCPUs","value":"72"},{"name":"MemoryGB","value":"144"}],"locationInfo":[{"location":"eastus","zones":["1","2","3"]}],"restrictions":[]},
+ {"name":"Standard_B2s","family":"standardBSFamily","capabilities":[{"name":"vCPUs","value":"2"},{"name":"MemoryGB","value":"4"},{"name":"HyperVGenerations","value":"V1,V2"},{"name":"AcceleratedNetworkingEnabled","value":"False"}],"locationInfo":[{"location":"eastus","zones":["1","2","3"]}],"restrictions":[]},
+ {"name":"Standard_NC24ads_A100_v4","family":"StandardNCADSA100v4Family","capabilities":[{"name":"vCPUs","value":"24"},{"name":"MemoryGB","value":"220"},{"name":"GPUs","value":"1"},{"name":"HyperVGenerations","value":"V2"}],"locationInfo":[{"location":"eastus","zones":["1"]}],"restrictions":[]},
+ {"name":"Standard_NV12s_v3","family":"standardNVSv3Family","capabilities":[{"name":"vCPUs","value":"12"},{"name":"MemoryGB","value":"112"},{"name":"GPUs","value":"1"}],"locationInfo":[{"location":"eastus","zones":["1","2"]}],"restrictions":[]},
+ {"name":"Standard_HB120rs_v3","family":"standardHBrsv3Family","capabilities":[{"name":"vCPUs","value":"120"},{"name":"MemoryGB","value":"448"}],"locationInfo":[{"location":"eastus","zones":[]}],"restrictions":[]},
+ {"name":"Standard_D2","family":"standardDFamily","capabilities":[{"name":"vCPUs","value":"2"},{"name":"MemoryGB","value":"7"}],"locationInfo":[{"location":"eastus"}],"restrictions":[]},
+ {"name":"Standard_M128s","family":"standardMSFamily","capabilities":[{"name":"vCPUs","value":"128"},{"name":"MemoryGB","value":"2048"}],"locationInfo":[{"location":"eastus","zones":["1","2","3"]}],"restrictions":[{"type":"Location","values":["eastus"],"reasonCode":"QuotaId","restrictionInfo":{"locations":["eastus"]}}]},
+ {"name":"Standard_NC6","family":"standardNCFamily","capabilities":[{"name":"vCPUs","value":"6"}],"restrictions":[{"type":"Location","values":["eastus"],"reasonCode":"NotAvailableForSubscription","restrictionInfo":{"locations":["eastus"]}}]}]
+J
+;;
+ vm\ list-usage*)
+  if [[ "$loc" != "eastus" ]]; then echo '[]'; exit 0; fi
+  echo '[{"name":{"value":"cores","localizedValue":"Total Regional vCPUs"},"localName":"Total Regional vCPUs","currentValue":"40","limit":"100"},
+{"name":{"value":"standardDSv5Family"},"localName":"Standard DSv5 Family vCPUs","currentValue":"12","limit":"20"},
+{"name":{"value":"standardESv5Family"},"localName":"Standard ESv5 Family vCPUs","currentValue":0,"limit":10},
+{"name":{"value":"standardDDSv4Family"},"localName":"Standard DDSv4 Family vCPUs","currentValue":"0","limit":"50"},
+{"name":{"value":"standardFSv2Family"},"localName":"Standard FSv2 Family vCPUs","currentValue":"0","limit":"100"},
+{"name":{"value":"StandardNCADSA100v4Family"},"localName":"Standard NCADS A100 v4 Family vCPUs","currentValue":0,"limit":0},
+{"name":{"value":"standardNVSv3Family"},"localName":"Standard NVSv3 Family vCPUs","currentValue":"0","limit":"24"},
+{"name":{"value":"standardHBrsv3Family"},"localName":"Standard HBrsv3 Family vCPUs","currentValue":"0","limit":"0"},
+{"name":{"value":"standardDFamily"},"localName":"Standard D Family vCPUs","currentValue":"0","limit":"10"},
+{"name":{"value":"standardMSFamily"},"localName":"Standard MS Family vCPUs","currentValue":"0","limit":"0"},
+{"name":{"value":"standardNCFamily"},"localName":"Standard NC Family vCPUs","currentValue":"0","limit":"0"},
+{"name":{"value":"availabilitySets"},"localName":"Availability Sets","currentValue":"3","limit":"2500"}]';;
+ "capacity reservation group list"*) echo "/subscriptions/x/resourceGroups/rg1/providers/Microsoft.Compute/capacityReservationGroups/crg-prod";;
+ "capacity reservation list"*) echo '[{"name":"res-d4","location":"eastus","sku":{"name":"Standard_D4s_v5","capacity":5},"zones":["1"]}]';;
+esac
