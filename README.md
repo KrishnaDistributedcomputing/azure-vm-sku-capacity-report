@@ -1,5 +1,8 @@
 # Azure VM SKU Availability Report
 
+> **New here? Start with [Getting Started](docs/GETTING_STARTED.md)**: a step-by-step guide to running the script
+> (Cloud Shell, Linux/macOS, Windows), signing in, and the exact permissions it needs (Reader is enough).
+
 `azure-vm-sku-report.sh` is a single Bash script that tells you **which Azure VM sizes (SKUs) a subscription can deploy,
 which will fail, and why**. For every SKU in the regions you choose, it checks:
 
@@ -21,6 +24,7 @@ quota view, capacity reservations, and a *Troubleshooting & Help* tab that expla
 ---
 
 ## Contents
+- [Getting Started guide](docs/GETTING_STARTED.md)
 - [Prerequisites](#prerequisites)
 - [Required permissions](#required-permissions)
 - [Install](#install)
@@ -48,6 +52,8 @@ quota view, capacity reservations, and a *Troubleshooting & Help* tab that expla
 script.
 
 ## Required permissions
+
+Full details, including what breaks when a permission is missing and how to create the custom role: [Getting Started > Permissions](docs/GETTING_STARTED.md#7-permissions).
 
 The script only reads data. The built-in **Reader** role on the subscription is enough. With the minimum permissions below,
 the corresponding parts of the report are filled in:
@@ -362,6 +368,7 @@ the sample with a small tab-switching script injected. See the end of [docs/SAMP
 - CSV formula-injection protection and CRLF line endings.
 - Input validation for `-l`, `-s`, `-f` and `-o`. Region and reservation lists no longer glob or word-split.
 - Copy-paste commands in the help tab use only safe characters. Temp-dir cleanup on INT/TERM.
+- Added `docs/GETTING_STARTED.md` (step-by-step run guide and permissions).
 - Added `docs/SAMPLE_REPORT.md` (sample report walkthrough) and a new screenshot set in `docs/screenshots/`.
 - Added `test/run-tests.sh`, plus malicious-data and call-logging modes in `test/mock-az`.
 
