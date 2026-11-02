@@ -363,6 +363,23 @@ the sample with a small tab-switching script injected. See the end of [docs/SAMP
 
 ## Changelog
 
+### 1.3.2 (2026-11-02): worked examples throughout remediation guide
+- Added **16 concrete worked examples** throughout all 8 remediation sections with realistic SKU names, regions, zones,
+  and resource names.
+- Each example includes: the specific error message as Azure returns it (code + message text), exact diagnostic commands
+  with real-looking values, expected output snippets, and complete fix/retry commands with those values filled in.
+- Expanded AllocationFailed section with detailed worked examples: `Standard_D8s_v5` in `eastus` zone 2 with full retry
+  output showing backoff timing, `Standard_NC24ads_A100_v4` GPU VM with PowerShell retry, zone fallback example showing
+  output at each step, availability set scenario with `web-vm-04`, resize example with `db-vm-01`, fallback ladder with
+  multiple alternatives, pipeline script with parameterized fallback sizes, and correlation ID capture with example output.
+- Added realistic examples for: `Standard_M128s` restricted SKU, `Standard_NC24ads_A100_v4` quota 0, `Standard_F72s_v2`
+  regional quota, `Standard_E8s_v5` zonal restrictions, `Standard_D16ds_v4` zone-pinned, `Standard_HB120rs_v3` quota
+  unknown, and `Standard_D2s_v5` will deploy.
+- All examples clearly labeled with "Example:" prefix and use realistic resource group names (prod-rg, ml-rg, db-rg).
+- Regenerated docs/sample-report.html (725 lines, 16 examples).
+- Added 7 new tests verifying worked examples are present (32 tests total, all pass).
+- Bumped version to 1.3.2.
+
 ### 1.3.1 (2026-11-02): expanded allocation failure remediation
 - Significantly expanded the **Allocation risk** remediation section with detailed guidance on AllocationFailed and
   ZonalAllocationFailed errors.

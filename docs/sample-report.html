@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-ec8VBow5xs980cPMTJb27sdArwi7g/mpLY7rJYgCleY='; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-duSNg6jFNqrAUVvzFghVyw9QvHBNwbNv3+lQweRMSB0='; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer"><meta name="robots" content="noindex,nofollow">
 <title>Azure VM SKU Availability Report</title>
 <style>
@@ -175,56 +175,186 @@ button.dl{border:1px solid var(--blue);color:var(--blue);background:#fff;padding
 <p>Click the <b>Predicted outcome</b> pill for a SKU to jump to its remediation steps, or expand a category below. Commands are filled in from the SKU table where practical; substitute <code>&lt;region&gt;</code>, <code>&lt;size&gt;</code> and <code>&lt;family&gt;</code> when needed.</p>
 
 <h3 id="rem-restricted">1. SKU restricted (SkuNotAvailable / InvalidTemplateDeployment)</h3>
+
+<p><b>Example:</b> Deploying <code>Standard_M128s</code> in <code>eastus</code> fails with:</p>
+<pre>Code: SkuNotAvailable
+Message: The requested VM size 'Standard_M128s' is not available in location 'eastus' 
+for subscription '12345678-1234-1234-1234-123456789012'. Restrictions: NotAvailableForSubscription</pre>
+
+<p><b>Diagnose:</b></p>
 <ol>
-<li>Confirm: <code>az vm list-skus -l &lt;region&gt; --size &lt;size&gt; --all -o table</code> and read the Restrictions column.</li>
+<li>Confirm: <code>az vm list-skus -l eastus --size Standard_M128s --all -o table</code></li>
+<li>Look for the <b>Restrictions</b> column. Example output:
+<pre>Name             Size              Capabilities                    Restrictions
+Standard_M128s   Standard_M128s    vCPUs=128,MemoryGB=2048,...     NotAvailableForSubscription, type: Location</pre>
+</li>
 <li>NotAvailableForSubscription: pick a sibling size in the same family (e.g. v5 instead of v4) or a region where Restrictions is empty.</li>
 <li>Need that exact size/region: open an Azure support request, type <b>Service and subscription limits (quotas)</b>, and ask to enable the SKU in that region.</li>
 <li>QuotaId: the subscription offer type (free trial, MSDN/Visual Studio) can't use the size. Pick an allowed size or deploy from a Pay-As-You-Go/EA subscription.</li>
 <li>ARM/Bicep: look inside InvalidTemplateDeployment for the inner SkuNotAvailable; parameterize the VM size so it can be swapped without editing the template.</li>
 </ol>
 
+<p><b>Fix example:</b> Try a similar size in another region or request enablement:</p>
+<pre># Try westus2 where M-series may be available
+az vm list-skus -l westus2 --size Standard_M128s --all -o table
+# Or use a similar size that isn't restricted
+az vm create -g my-rg -n my-vm --image Ubuntu2204 --size Standard_E64s_v5 -l eastus</pre>
+
 <h3 id="rem-quota0">2. Family quota is 0 / exceeded (QuotaExceeded / OperationNotAllowed)</h3>
+
+<p><b>Example:</b> Creating <code>Standard_NC24ads_A100_v4</code> (24 vCPUs) in <code>westus3</code> fails with:</p>
+<pre>Code: OperationNotAllowed
+Message: Operation could not be completed as it results in exceeding approved 
+Standard NCADSv4_A100 Family Cores quota. Current usage: 0, requested: 24, limit: 0.
+Additional details: Quota ID: StandardNCADSv4_A100Family...</pre>
+
+<p><b>Diagnose:</b></p>
 <ol>
-<li><code>az vm list-usage -l &lt;region&gt; -o table</code>; find the family row (e.g. "Standard DSv5 Family vCPUs").</li>
-<li>Needed = current usage + (SKU vCPUs × VM count).</li>
-<li>Portal &gt; <b>Quotas</b> &gt; <b>Compute</b>, filter region + family, <b>New quota request</b>. Small increases are often auto-approved in minutes.</li>
+<li><code>az vm list-usage -l westus3 -o table</code> and find the family row. Example output:
+<pre>Name                                    Current Value    Limit
+Standard NCADSv4_A100 Family vCPUs     0                0
+Total Regional vCPUs                    12               100</pre>
+</li>
+<li>Needed = current usage + (SKU vCPUs × VM count). Here: 0 + (24 × 1) = 24, but limit is 0.</li>
+<li>Portal &gt; <b>Quotas</b> &gt; <b>Compute</b>, filter region + family, <b>New quota request</b>. Request at least 24 (or 48 if you need 2 VMs). Small increases are often auto-approved in minutes.</li>
 <li>Meanwhile free quota by deallocating/deleting unused VMs in that family (Stopped but not deallocated still holds cores) or use a family with headroom.</li>
 </ol>
 
+<p><b>Fix example:</b> Request quota via CLI or portal:</p>
+<pre># Using az quota extension (install with: az extension add --name quota)
+SCOPE=/subscriptions/12345678-1234-1234-1234-123456789012/providers/Microsoft.Compute/locations/westus3
+az quota update --resource-name standardNCADSv4_A100Family --scope $SCOPE \
+  --limit-object value=48 --resource-type dedicated
+# Check request status
+az quota request status list --scope $SCOPE -o table</pre>
+
 <h3 id="rem-regquota">3. Regional quota exceeded (Total Regional Cores)</h3>
+
+<p><b>Example:</b> Creating <code>Standard_F72s_v2</code> (72 vCPUs) in <code>eastus</code> fails with:</p>
+<pre>Code: OperationNotAllowed
+Message: Operation could not be completed as it results in exceeding approved 
+Total Regional Cores quota. Current usage: 60, requested: 72, limit: 100.</pre>
+
+<p><b>Diagnose:</b></p>
 <ol>
-<li>In the same list-usage output check "Total Regional vCPUs".</li>
+<li>In the same list-usage output check "Total Regional vCPUs". Example:
+<pre>Name                         Current Value    Limit
+Total Regional vCPUs         60               100
+Standard FSv2 Family vCPUs   8                350</pre>
+The family has room (8/350), but regional quota doesn't (60+72 = 132 &gt; 100).
+</li>
 <li>Request an increase on Total Regional vCPUs on the same Quotas page; it must be at least as high as the family request since both must fit.</li>
 <li>Meanwhile deallocate idle VMs anywhere in that region or deploy to another region.</li>
 <li>Spot VMs use "Total Regional Low-priority vCPUs", a separate limit.</li>
 </ol>
 
+<p><b>Fix example:</b></p>
+<pre># Request increase to 150 (current 60 + needed 72 + headroom)
+SCOPE=/subscriptions/12345678-1234-1234-1234-123456789012/providers/Microsoft.Compute/locations/eastus
+az quota update --resource-name cores --scope $SCOPE --limit-object value=150 --resource-type dedicated
+
+# Or deallocate idle VMs to free quota immediately
+az vm list -g my-rg --query "[?powerState=='VM deallocated']" -o table
+az vm deallocate -g my-rg -n idle-vm-1</pre>
+
 <h3 id="rem-zonal">4. Zonal deploy fails in zone X (SkuNotAvailable ... zones 'N')</h3>
+
+<p><b>Example:</b> Deploying <code>Standard_E8s_v5</code> in <code>eastus</code> zone 3 fails with:</p>
+<pre>Code: SkuNotAvailable
+Message: The requested VM size 'Standard_E8s_v5' is not available in location 'eastus' zones '3'. 
+The sizes available in location 'eastus' zones '3' are: ...</pre>
+
+<p><b>Diagnose:</b></p>
 <ol>
-<li><code>az vm list-skus -l &lt;region&gt; --size &lt;size&gt; --zone -o table</code> to see which zones offer it.</li>
+<li><code>az vm list-skus -l eastus --size Standard_E8s_v5 --zone -o table</code> to see which zones offer it. Example output:
+<pre>Name              Locations    Zones    Restrictions
+Standard_E8s_v5   eastus       1,2      Zone, type: Zone, zones: 3</pre>
+Zone 3 is restricted; zones 1 and 2 are OK.
+</li>
 <li>Change the deployment's <code>zones</code> to an allowed zone, or remove the zone pin if zonal placement isn't required.</li>
 <li>If you need all 3 zones for HA, choose a size offered in every zone.</li>
 <li>Scale sets: set <code>zones</code> only to supported zones; enable zone balancing only if every zone supports the size.</li>
 </ol>
 
+<p><b>Fix example:</b></p>
+<pre># Deploy in zone 1 instead
+az vm create -g my-rg -n my-vm --image Ubuntu2204 --size Standard_E8s_v5 -l eastus --zone 1
+
+# Or deploy regionally (no zone pin) if zonal placement isn't required
+az vm create -g my-rg -n my-vm --image Ubuntu2204 --size Standard_E8s_v5 -l eastus
+
+# For scale sets spanning zones 1 and 2 only
+az vmss create -g my-rg -n my-vmss --image Ubuntu2204 --vm-sku Standard_E8s_v5 -l eastus \
+  --zones 1 2 --platform-fault-domain-count 1</pre>
+
 <h3 id="rem-zonepinned">5. Only offered in some zones / no zone support</h3>
+
+<p><b>Example:</b> <code>Standard_D16ds_v4</code> in <code>westus2</code> is only offered in zone 1, but your template pins zone 2.</p>
+
+<p><b>Diagnose:</b></p>
+<pre>az vm list-skus -l westus2 --size Standard_D16ds_v4 --zone -o table
+# Output shows:
+Name               Locations    Zones    Restrictions
+Standard_D16ds_v4  westus2      1        None</pre>
+
+<p><b>Fix:</b></p>
 <ol>
 <li>Don't hard-code a zone; read supported zones from list-skus and parameterize.</li>
 <li>No zone support: deploy regionally and get resilience from an availability set or a second region.</li>
 <li>If zonal resilience is required, pick a size available in all zones.</li>
 </ol>
 
+<p><b>Fix example:</b></p>
+<pre># Parameterize the zone in your deployment script
+ZONES=$(az vm list-skus -l westus2 --size Standard_D16ds_v4 --zone --query "[0].locationInfo[0].zones" -o tsv | tr '\t' ' ')
+echo "Available zones: $ZONES"  # Output: 1
+az vm create -g my-rg -n my-vm --image Ubuntu2204 --size Standard_D16ds_v4 -l westus2 --zone 1
+
+# Or choose a size available in all zones for HA
+az vm list-skus -l westus2 --size Standard_D16s_v5 --zone -o table  # Check v5 instead</pre>
+
 <h3 id="rem-quotaunknown">6. Quota unknown / tight</h3>
+
+<p><b>Example:</b> <code>Standard_HB120rs_v3</code> in <code>southcentralus</code> doesn't appear in list-usage output.</p>
+
+<p><b>Diagnose:</b></p>
+<pre>az vm list-usage -l southcentralus -o table | grep -i hbrsv3
+# No output - family is missing from the quota list, which usually means limit 0</pre>
+
+<p><b>Fix:</b></p>
 <ol>
 <li>Family missing from list-usage usually means limit 0: treat as case 2 and request quota before deploying.</li>
 <li>If only 1-2 VMs fit, request quota for peak scale + ~20% so autoscale doesn't fail.</li>
 <li>Create quota alerts (Portal &gt; <b>Quotas</b> &gt; <b>Create alert rule</b>) at ~80% usage.</li>
 </ol>
 
+<p><b>Fix example:</b></p>
+<pre># Request quota for the missing family (120 vCPUs per VM, request 240 for 2 VMs)
+SCOPE=/subscriptions/12345678-1234-1234-1234-123456789012/providers/Microsoft.Compute/locations/southcentralus
+az quota update --resource-name standardHBrsv3Family --scope $SCOPE \
+  --limit-object value=240 --resource-type dedicated
+
+# For tight quota (only 1-2 VMs fit), request headroom
+# Example: 20 vCPUs used, 24 limit, need to scale to 5 VMs (40 vCPUs)
+az quota update --resource-name standardDSv5Family --scope $SCOPE \
+  --limit-object value=50 --resource-type dedicated  # 40 + 20% headroom</pre>
+
 <h3 id="rem-alloc">7. Allocation failures: no capacity right now</h3>
 
 <h4 id="rem-alloc-errors">Understanding allocation errors</h4>
 <p><b>AllocationFailed</b> and <b>ZonalAllocationFailed</b> mean Azure has no free hardware for that size in the target region, zone, or datacenter cluster <b>right now</b>. Your request is valid, quota is fine, and the size isn't restricted—there's just no capacity available at this moment. Capacity frees up constantly as other customers deallocate VMs.</p>
+
+<p><b>Example error (AllocationFailed):</b> Creating <code>Standard_D8s_v5</code> in <code>eastus</code> zone 2 fails with:</p>
+<pre>Code: AllocationFailed
+Message: Allocation failed. We do not have sufficient capacity for the requested VM size 
+in this region. Read more about improving likelihood of allocation success at 
+http://aka.ms/allocation-guidance</pre>
+
+<p><b>Example error (ZonalAllocationFailed):</b> Creating <code>Standard_NC24ads_A100_v4</code> in <code>westus3</code> zone 1:</p>
+<pre>Code: ZonalAllocationFailed
+Message: Allocation failed. VM(s) with the following constraints cannot be allocated, 
+because the condition is too restrictive. Please remove some constraints and try again. 
+Constraints applied are: Hosting plan = Azure VM, Zone = 1, VM size = Standard_NC24ads_A100_v4.</pre>
 
 <p><b>When it happens:</b></p>
 <ul>
@@ -245,106 +375,208 @@ button.dl{border:1px solid var(--blue);color:var(--blue);background:#fff;padding
 <h4 id="rem-alloc-retry">How to retry properly</h4>
 <p><b>Use exponential backoff with jitter</b> (1, 2, 4, 8, 15 min caps). Capacity changes as other customers deallocate VMs, so retries often succeed within minutes.</p>
 
-<p><b>Bash example (create VM with retry):</b></p>
+<p><b>Worked example: Bash retry for Standard_D8s_v5 in eastus zone 2</b></p>
 <pre>#!/bin/bash
+# Example values (replace with your own)
 MAX_ATTEMPTS=5
 DELAYS=(60 120 240 480 900)  # 1, 2, 4, 8, 15 min in seconds
-RG="my-rg"; VM="my-vm"; SIZE="Standard_D4s_v5"; REGION="eastus"; ZONE="1"
+RG="prod-rg"
+VM="webserver-01"
+SIZE="Standard_D8s_v5"
+REGION="eastus"
+ZONE="2"
 
 for i in $(seq 0 $((MAX_ATTEMPTS - 1))); do
   echo "Attempt $((i + 1))/$MAX_ATTEMPTS: creating VM $VM..."
   if az vm create -g "$RG" -n "$VM" --image Ubuntu2204 --size "$SIZE" -l "$REGION" --zone "$ZONE" 2&gt;&amp;1 | tee /tmp/vm-create.log; then
-    echo "Success!"; exit 0
+    echo "Success! VM $VM created in zone $ZONE"; exit 0
   fi
+  
+  # Check if the error is AllocationFailed
   if grep -qE '(AllocationFailed|ZonalAllocationFailed)' /tmp/vm-create.log; then
     if [ $i -lt $((MAX_ATTEMPTS - 1)) ]; then
       DELAY=${DELAYS[$i]}; JITTER=$((RANDOM % 30))  # add 0-30s jitter
-      echo "AllocationFailed detected. Retrying in $((DELAY + JITTER))s..."
+      echo "AllocationFailed detected. Retrying in $((DELAY + JITTER))s (backoff: ${DELAY}s + jitter)..."
       sleep $((DELAY + JITTER))
     else
-      echo "All retries exhausted. Trying fallback strategies..."; exit 1
+      echo "All $MAX_ATTEMPTS retries exhausted. Trying fallback strategies..."; exit 1
     fi
   else
-    echo "Different error (not allocation). Exiting."; exit 1
+    echo "Different error (not allocation). Full error:"; cat /tmp/vm-create.log; exit 1
   fi
 done</pre>
 
-<p><b>PowerShell example (start deallocated VM with retry):</b></p>
-<pre>$MaxAttempts = 5
+<p><b>Expected output on success after 2 retries:</b></p>
+<pre>Attempt 1/5: creating VM webserver-01...
+AllocationFailed detected. Retrying in 73s (backoff: 60s + jitter)...
+Attempt 2/5: creating VM webserver-01...
+AllocationFailed detected. Retrying in 142s (backoff: 120s + jitter)...
+Attempt 3/5: creating VM webserver-01...
+Success! VM webserver-01 created in zone 2</pre>
+
+<p><b>Worked example: PowerShell retry for starting a deallocated GPU VM</b></p>
+<pre># Example: Standard_NC24ads_A100_v4 in westus3
+$MaxAttempts = 5
 $Delays = @(60, 120, 240, 480, 900)
-$RG = "my-rg"; $VM = "my-vm"
+$RG = "ml-rg"; $VM = "gpu-vm-01"
 
 for ($i = 0; $i -lt $MaxAttempts; $i++) {
   Write-Host "Attempt $($i + 1)/$MaxAttempts : starting VM $VM..."
   try {
     Start-AzVM -ResourceGroupName $RG -Name $VM -ErrorAction Stop
-    Write-Host "Success!"; exit 0
+    Write-Host "Success! VM $VM started."; exit 0
   } catch {
-    if ($_.Exception.Message -match 'AllocationFailed|ZonalAllocationFailed') {
+    $ErrorMessage = $_.Exception.Message
+    if ($ErrorMessage -match 'AllocationFailed|ZonalAllocationFailed') {
       if ($i -lt ($MaxAttempts - 1)) {
         $Delay = $Delays[$i]; $Jitter = Get-Random -Maximum 30
         Write-Host "AllocationFailed detected. Retrying in $($Delay + $Jitter)s..."
         Start-Sleep -Seconds ($Delay + $Jitter)
       } else {
-        Write-Host "All retries exhausted."; exit 1
+        Write-Host "All $MaxAttempts retries exhausted."; exit 1
       }
     } else {
-      Write-Host "Different error: $($_.Exception.Message)"; exit 1
+      Write-Host "Different error (not allocation): $ErrorMessage"; exit 1
     }
   }
 }</pre>
 
 <p><b>For ZonalAllocationFailed:</b> retry in another zone, then without a zone pin:</p>
-<pre># Try zone 2, then zone 3, then regional (no zone)
+<pre># Example: Standard_D8s_v5 in eastus, try zones 2, 3, then regional
+RG="prod-rg"; VM="webserver-01"; SIZE="Standard_D8s_v5"; REGION="eastus"
+
 for ZONE in 2 3 ""; do
-  echo "Trying ${ZONE:-regional}..."
+  ZONE_NAME="${ZONE:-regional (no zone pin)}"
+  echo "Attempt: creating VM in $ZONE_NAME..."
   ZONE_ARG=""; [ -n "$ZONE" ] &amp;&amp; ZONE_ARG="--zone $ZONE"
-  if az vm create -g "$RG" -n "$VM" --image Ubuntu2204 --size "$SIZE" -l "$REGION" $ZONE_ARG; then
-    echo "Success in ${ZONE:-regional}!"; exit 0
+  
+  if az vm create -g "$RG" -n "$VM" --image Ubuntu2204 --size "$SIZE" -l "$REGION" $ZONE_ARG 2&gt;&amp;1 | tee /tmp/vm-zone.log; then
+    echo "Success! VM created in $ZONE_NAME"; exit 0
   fi
-done</pre>
+  
+  if ! grep -qE 'AllocationFailed|ZonalAllocationFailed' /tmp/vm-zone.log; then
+    echo "Non-allocation error in $ZONE_NAME, stopping."; cat /tmp/vm-zone.log; exit 1
+  fi
+  echo "AllocationFailed in $ZONE_NAME, trying next option..."
+done
+echo "All zones exhausted."; exit 1</pre>
+
+<p><b>Expected output:</b></p>
+<pre>Attempt: creating VM in zone 2...
+AllocationFailed in zone 2, trying next option...
+Attempt: creating VM in zone 3...
+Success! VM created in zone 3</pre>
 
 <h4 id="rem-alloc-specific">Specific scenarios</h4>
 
 <p><b>Availability set:</b> a VM must fit on the cluster that already hosts the set. If it fails, deallocate <b>all</b> VMs in the set, then start them together so Azure can move the set to a cluster with room.</p>
-<pre>az vm deallocate --ids $(az vm list -g &lt;rg&gt; --query "[?availabilitySet.id!=null].id" -o tsv)
-az vm start --ids $(az vm list -g &lt;rg&gt; --query "[?availabilitySet.id!=null].id" -o tsv)</pre>
+
+<p><b>Example:</b> Adding <code>web-vm-04</code> to an availability set in <code>eastus</code> that already has 3 VMs fails with AllocationFailed.</p>
+<pre># Deallocate all VMs in the availability set
+az vm deallocate --ids $(az vm list -g prod-rg --query "[?availabilitySet.id!=null].id" -o tsv)
+
+# Start them all together (Azure picks a cluster with room for all)
+az vm start --ids $(az vm list -g prod-rg --query "[?availabilitySet.id!=null].id" -o tsv)
+
+# Now create the 4th VM
+az vm create -g prod-rg -n web-vm-04 --image Ubuntu2204 --size Standard_D4s_v5 -l eastus \
+  --availability-set web-avset</pre>
 
 <p><b>Proximity placement group:</b> same principle. Deallocate all VMs in the group, then start the most restrictive size first (e.g. GPU or M-series).</p>
 
 <p><b>Resizing an existing VM:</b> deallocate it first so it can move to a different cluster, then resize:</p>
-<pre>az vm deallocate -g &lt;rg&gt; -n &lt;vm&gt;
-az vm resize -g &lt;rg&gt; -n &lt;vm&gt; --size &lt;new-size&gt;
-az vm start -g &lt;rg&gt; -n &lt;vm&gt;</pre>
+<pre># Example: resizing db-vm-01 from Standard_E8s_v5 to Standard_E16s_v5
+az vm deallocate -g db-rg -n db-vm-01
+az vm resize -g db-rg -n db-vm-01 --size Standard_E16s_v5
+az vm start -g db-rg -n db-vm-01</pre>
 
 <h4 id="rem-alloc-fallback">Fallback ladder after retries fail</h4>
+
+<p><b>Example scenario:</b> <code>Standard_D8s_v5</code> in <code>eastus</code> zone 2 fails after 5 retries with exponential backoff.</p>
+
 <ol>
-<li><b>Same size, another zone</b> (if zonal): <code>--zone 2</code> or <code>--zone 3</code></li>
-<li><b>Remove zone pin</b>: deploy regionally (omit <code>--zone</code>)</li>
-<li><b>Sibling or newer-generation size</b>: e.g. v5 instead of v3, or an AMD variant (<code>_a</code> suffix). Check the error message for suggested sizes. List alternatives: <code>az vm list-skus -l &lt;region&gt; --size &lt;family-prefix&gt; -o table</code></li>
-<li><b>Nearby region</b>: try a paired region or another region in the same geography</li>
+<li><b>Same size, another zone</b> (if zonal):
+<pre>az vm create -g prod-rg -n webserver-01 --image Ubuntu2204 --size Standard_D8s_v5 -l eastus --zone 1
+# or zone 3</pre></li>
+
+<li><b>Remove zone pin</b>: deploy regionally (omit <code>--zone</code>)
+<pre>az vm create -g prod-rg -n webserver-01 --image Ubuntu2204 --size Standard_D8s_v5 -l eastus</pre></li>
+
+<li><b>Sibling or newer-generation size</b>: e.g. v5 instead of v3, or an AMD variant (<code>_a</code> suffix). Check the error message for suggested sizes. List alternatives:
+<pre># Try D8as_v5 (AMD variant) or D8ds_v5 (local disk variant)
+az vm list-skus -l eastus --size Standard_D8 --query "[?contains(name,'v5')]" -o table
+az vm create -g prod-rg -n webserver-01 --image Ubuntu2204 --size Standard_D8as_v5 -l eastus --zone 2</pre></li>
+
+<li><b>Nearby region</b>: try a paired region or another region in the same geography
+<pre># eastus2 is the paired region for eastus
+az vm create -g prod-rg -n webserver-01 --image Ubuntu2204 --size Standard_D8s_v5 -l eastus2 --zone 2</pre></li>
+
 <li><b>On-Demand Capacity Reservation</b> for critical sizes (GPU, HPC, M-series, 64+ vCPUs): guarantees capacity but is billed whether used or not. Create it before you need it:
-<pre>az capacity reservation group create -g &lt;rg&gt; -n crg-prod -l &lt;region&gt; --zones 1 2 3
-az capacity reservation create -g &lt;rg&gt; -c crg-prod -n res-&lt;size&gt; --sku &lt;size&gt; --capacity &lt;count&gt; --zone 1</pre></li>
+<pre># Example: reserve 2x Standard_NC24ads_A100_v4 in westus3 zone 1
+az capacity reservation group create -g ml-rg -n gpu-crg -l westus3 --zones 1
+az capacity reservation create -g ml-rg -c gpu-crg -n gpu-res-nc24 \
+  --sku Standard_NC24ads_A100_v4 --capacity 2 --zone 1
+
+# Use the reservation when creating VMs
+CRG_ID=$(az capacity reservation group show -g ml-rg -n gpu-crg --query id -o tsv)
+az vm create -g ml-rg -n gpu-vm-01 --image Ubuntu2204 --size Standard_NC24ads_A100_v4 \
+  -l westus3 --zone 1 --capacity-reservation-group $CRG_ID</pre></li>
 </ol>
 
 <p><b>Spot VMs are not a fix.</b> Spot runs on spare capacity and is evicted first when a region is short. Use Spot for interruptible workloads, not to work around AllocationFailed.</p>
 
 <h4 id="rem-alloc-pipeline">Guidance for pipelines and IaC</h4>
-<ul>
-<li><b>Parameterize size and zone</b> in templates so you can swap them without editing. Store a fallback size list.</li>
-<li><b>Add retry policies</b> with exponential backoff in your deployment scripts (examples above).</li>
-<li><b>Capture the correlation ID</b> from the error for a support case if failures persist. Find it in the Azure CLI error output (<code>Correlation ID: ...</code>) or query the activity log:
-<pre>az monitor activity-log list --resource-group &lt;rg&gt; --caller &lt;your-email&gt; --status Failed \
-  --start-time $(date -u -d '1 hour ago' '+%Y-%m-%dT%H:%M:%SZ') --query "[?contains(status.value,'Failed')].{Time:eventTimestamp,Operation:operationName.localizedValue,Status:status.localizedValue,CorrelationId:correlationId}" -o table</pre>
-Include the correlation ID and the full error text when opening a support request.</li>
-<li><b>Monitor allocation failures</b> as a metric. Log every failure with the size, region, zone and timestamp so you can spot patterns.</li>
-</ul>
+
+<p><b>Example: Parameterized deployment with fallback sizes</b></p>
+<pre>#!/bin/bash
+# Pipeline script example: try primary size, then fallback
+RG="prod-rg"; VM="app-vm-01"; REGION="eastus"; ZONE="2"
+PRIMARY_SIZE="Standard_D8s_v5"
+FALLBACK_SIZES=("Standard_D8as_v5" "Standard_D8ds_v5" "Standard_D8s_v4")
+
+# Try primary size with retry
+if ! bash retry-vm-create.sh "$RG" "$VM" "$PRIMARY_SIZE" "$REGION" "$ZONE"; then
+  echo "Primary size $PRIMARY_SIZE failed after retries. Trying fallbacks..."
+  for SIZE in "${FALLBACK_SIZES[@]}"; do
+    echo "Attempting fallback size: $SIZE"
+    if az vm create -g "$RG" -n "$VM" --image Ubuntu2204 --size "$SIZE" -l "$REGION" --zone "$ZONE"; then
+      echo "Success with fallback size $SIZE"; exit 0
+    fi
+  done
+  echo "All fallback sizes failed."; exit 1
+fi</pre>
+
+<p><b>Capture the correlation ID</b> from the error for a support case if failures persist. Find it in the Azure CLI error output (<code>Correlation ID: ...</code>) or query the activity log:</p>
+<pre># Example: find failed VM operations in the last hour for prod-rg
+az monitor activity-log list --resource-group prod-rg \
+  --status Failed \
+  --start-time $(date -u -d '1 hour ago' '+%Y-%m-%dT%H:%M:%SZ') \
+  --query "[?contains(operationName.localizedValue,'Virtual Machine')].{Time:eventTimestamp,Operation:operationName.localizedValue,Status:status.localizedValue,CorrelationId:correlationId,Caller:caller}" \
+  -o table</pre>
+
+<p><b>Example output:</b></p>
+<pre>Time                       Operation                           Status    CorrelationId                         Caller
+2026-11-02T16:45:23.000Z   Create or Update Virtual Machine     Failed    a1b2c3d4-e5f6-7890-abcd-1234567890ab  user@contoso.com</pre>
+
+<p>Include the correlation ID (<code>a1b2c3d4-e5f6-7890-abcd-1234567890ab</code>) and the full error text when opening a support request. The correlation ID lets Microsoft trace the exact request in their systems.</p>
+
+<p><b>Monitor allocation failures</b> as a metric. Log every failure with the size, region, zone and timestamp so you can spot patterns.</p>
 
 <p><b>Legacy sizes</b> (Av1, Dv1, DSv1, D15_v2, G-series) run on older hardware that is shrinking. Move to current equivalents (Av2, Dv3/Dv5, etc.) for better availability.</p>
 
 <h3 id="rem-ok">8. Will deploy</h3>
-<p>No action needed. Azure doesn't publish free capacity, so keep the retry + fallback-size plan from case 7 in your pipeline anyway.</p>
+
+<p><b>Example:</b> <code>Standard_D2s_v5</code> (2 vCPUs) in <code>eastus</code> passes all checks:</p>
+<ul>
+<li>Not restricted (Restrictions column is empty)</li>
+<li>Family quota: DSv5 has 20 vCPUs total, 12 used, 8 free (2 needed: OK)</li>
+<li>Regional quota: 100 vCPUs total, 40 used, 60 free (2 needed: OK)</li>
+<li>Offered in zones 1, 2, 3 with no zone restrictions</li>
+</ul>
+
+<p>No action needed. Azure doesn't publish free capacity, so keep the retry + fallback-size plan from case 7 in your pipeline anyway. Even a "Will deploy" SKU can hit AllocationFailed if the datacenter cluster is full at deployment time.</p>
+
+<p><b>Best practice:</b> For production deployments, always include retry logic and fallback sizes even for SKUs predicted to deploy.</p>
 
 <h2 id="h-docs">Microsoft Learn docs</h2>
 <ul>
@@ -369,7 +601,7 @@ Capacity reservations are the only way to guarantee capacity in advance.</p>
 </main>
 <script>
 const D =
-{"subName":"Contoso-Prod","subId":"00000000-1111-2222-3333-444444444444","regions":["eastus","westus"],"regionInfo":[{"region":"eastus","skus":13,"error":""},{"region":"westus","skus":0,"error":""}],"filter":"","generated":"2026-11-02 17:01 UTC","redacted":false,"skus":[{"region":"eastus","sku":"Standard_D4s_v5","family":"standardDSv5Family","vcpus":4,"memGB":16,"maxDisks":"8","gpus":"","zones":"1 2 3","restrictedZones":"","status":"Available","reason":"","famUsed":12,"famLimit":20,"famFree":8,"regFree":60,"maxVMs":2,"canDeploy":"Yes","outcome":"Quota tight: only 2 VM(s) of this size fit","sev":"warn","cat":"quotatight","code":"OperationNotAllowed / QuotaExceeded","notes":""},{"region":"eastus","sku":"Standard_D2s_v5","family":"standardDSv5Family","vcpus":2,"memGB":8,"maxDisks":"","gpus":"","zones":"1 2 3","restrictedZones":"","status":"Available","reason":"","famUsed":12,"famLimit":20,"famFree":8,"regFree":60,"maxVMs":4,"canDeploy":"Yes","outcome":"Will deploy","sev":"ok","cat":"ok","code":"","notes":""},{"region":"eastus","sku":"Standard_D16s_v5","family":"standardDSv5Family","vcpus":16,"memGB":64,"maxDisks":"","gpus":"","zones":"1 2 3","restrictedZones":"","status":"Available","reason":"","famUsed":12,"famLimit":20,"famFree":8,"regFree":60,"maxVMs":0,"canDeploy":"No (quota)","outcome":"Will fail: family quota exceeded (needs 16 vCPUs, 8 free)","sev":"fail","cat":"famquota","code":"OperationNotAllowed / QuotaExceeded","notes":""},{"region":"eastus","sku":"Standard_E8s_v5","family":"standardESv5Family","vcpus":8,"memGB":64,"maxDisks":"","gpus":"","zones":"1 2 3","restrictedZones":"3","status":"PartiallyAvailable","reason":"NotAvailableForSubscription","famUsed":0,"famLimit":10,"famFree":10,"regFree":60,"maxVMs":1,"canDeploy":"Yes","outcome":"Zonal deploy fails in zone 3; use zones 1, 2","sev":"warn","cat":"zonal","code":"SkuNotAvailable","notes":"Quota tight: only 1 VM(s) of this size fit [OperationNotAllowed / QuotaExceeded]"},{"region":"eastus","sku":"Standard_D16ds_v4","family":"standardDDSv4Family","vcpus":16,"memGB":64,"maxDisks":"","gpus":"","zones":"1 2 3","restrictedZones":"1 2 3","status":"PartiallyAvailable","reason":"NotAvailableForSubscription","famUsed":0,"famLimit":50,"famFree":50,"regFree":60,"maxVMs":3,"canDeploy":"Yes","outcome":"Zonal deploy fails in all zones (1, 2, 3); a non-zonal deploy may still work","sev":"warn","cat":"zonal","code":"SkuNotAvailable","notes":""},{"region":"eastus","sku":"Standard_F72s_v2","family":"standardFSv2Family","vcpus":72,"memGB":144,"maxDisks":"","gpus":"","zones":"1 2 3","restrictedZones":"","status":"Available","reason":"","famUsed":0,"famLimit":100,"famFree":100,"regFree":60,"maxVMs":0,"canDeploy":"No (quota)","outcome":"Will fail: regional vCPU quota exceeded (needs 72, 60 free)","sev":"fail","cat":"regquota","code":"OperationNotAllowed / QuotaExceeded","notes":"Allocation risk: medium (very large size) [AllocationFailed / ZonalAllocationFailed]"},{"region":"eastus","sku":"Standard_B2s","family":"standardBSFamily","vcpus":2,"memGB":4,"maxDisks":"","gpus":"","zones":"1 2 3","restrictedZones":"","status":"Available","reason":"","famUsed":null,"famLimit":null,"famFree":null,"regFree":60,"maxVMs":30,"canDeploy":"Unknown","outcome":"Quota unknown: family standardBSFamily not in usage list","sev":"warn","cat":"quotaunknown","code":"","notes":"No accelerated networking (disable it on the NIC)"},{"region":"eastus","sku":"Standard_NC24ads_A100_v4","family":"StandardNCADSA100v4Family","vcpus":24,"memGB":220,"maxDisks":"","gpus":1,"zones":"1","restrictedZones":"","status":"Available","reason":"","famUsed":0,"famLimit":0,"famFree":0,"regFree":60,"maxVMs":0,"canDeploy":"No (quota)","outcome":"Will fail: family vCPU quota is 0 (request an increase)","sev":"fail","cat":"quota0","code":"OperationNotAllowed / QuotaExceeded","notes":"Allocation risk: high (GPU size, offered in only one zone) [AllocationFailed / ZonalAllocationFailed]; Only offered in zone 1; pinning another zone fails (SkuNotAvailable); Gen2 images only"},{"region":"eastus","sku":"Standard_NV12s_v3","family":"standardNVSv3Family","vcpus":12,"memGB":112,"maxDisks":"","gpus":1,"zones":"1 2","restrictedZones":"","status":"Available","reason":"","famUsed":0,"famLimit":24,"famFree":24,"regFree":60,"maxVMs":2,"canDeploy":"Yes","outcome":"Allocation risk: high (GPU size)","sev":"risk","cat":"alloc","code":"AllocationFailed / ZonalAllocationFailed","notes":"Quota tight: only 2 VM(s) of this size fit [OperationNotAllowed / QuotaExceeded]; Only offered in zones 1, 2; pinning another zone fails (SkuNotAvailable)"},{"region":"eastus","sku":"Standard_HB120rs_v3","family":"standardHBrsv3Family","vcpus":120,"memGB":448,"maxDisks":"","gpus":"","zones":"","restrictedZones":"","status":"Available","reason":"","famUsed":0,"famLimit":0,"famFree":0,"regFree":60,"maxVMs":0,"canDeploy":"No (quota)","outcome":"Will fail: family vCPU quota is 0 (request an increase)","sev":"fail","cat":"quota0","code":"OperationNotAllowed / QuotaExceeded","notes":"regional vCPU quota exceeded (needs 120, 60 free) [OperationNotAllowed / QuotaExceeded]; Allocation risk: high (HPC size, very large size) [AllocationFailed / ZonalAllocationFailed]; No availability-zone support here; deploy without a zone (pinning a zone fails: SkuNotAvailable)"},{"region":"eastus","sku":"Standard_D2","family":"standardDFamily","vcpus":2,"memGB":7,"maxDisks":"","gpus":"","zones":"","restrictedZones":"","status":"Available","reason":"","famUsed":0,"famLimit":10,"famFree":10,"regFree":60,"maxVMs":5,"canDeploy":"Yes","outcome":"Allocation risk: high (legacy size on older hardware)","sev":"risk","cat":"alloc","code":"AllocationFailed / ZonalAllocationFailed","notes":"No availability-zone support here; deploy without a zone (pinning a zone fails: SkuNotAvailable)"},{"region":"eastus","sku":"Standard_M128s","family":"standardMSFamily","vcpus":128,"memGB":2048,"maxDisks":"","gpus":"","zones":"1 2 3","restrictedZones":"","status":"NotAvailable","reason":"QuotaId","famUsed":0,"famLimit":0,"famFree":0,"regFree":60,"maxVMs":null,"canDeploy":"No (restricted)","outcome":"Will fail: SKU restricted for this subscription in this region (QuotaId)","sev":"fail","cat":"restricted","code":"SkuNotAvailable","notes":"family vCPU quota is 0 (request an increase) [OperationNotAllowed / QuotaExceeded]; regional vCPU quota exceeded (needs 128, 60 free) [OperationNotAllowed / QuotaExceeded]; Allocation risk: high (M-series (large memory), very large size) [AllocationFailed / ZonalAllocationFailed]"},{"region":"eastus","sku":"Standard_NC6","family":"standardNCFamily","vcpus":6,"memGB":0,"maxDisks":"","gpus":"","zones":"","restrictedZones":"","status":"NotAvailable","reason":"NotAvailableForSubscription","famUsed":0,"famLimit":0,"famFree":0,"regFree":60,"maxVMs":null,"canDeploy":"No (restricted)","outcome":"Will fail: SKU restricted for this subscription in this region (NotAvailableForSubscription)","sev":"fail","cat":"restricted","code":"SkuNotAvailable","notes":"family vCPU quota is 0 (request an increase) [OperationNotAllowed / QuotaExceeded]; Allocation risk: high (GPU size) [AllocationFailed / ZonalAllocationFailed]; No availability-zone support here; deploy without a zone (pinning a zone fails: SkuNotAvailable)"}],"quota":[{"region":"eastus","name":"Total Regional vCPUs","key":"cores","used":40,"limit":100,"free":60},{"region":"eastus","name":"Standard DSv5 Family vCPUs","key":"standardDSv5Family","used":12,"limit":20,"free":8},{"region":"eastus","name":"Standard ESv5 Family vCPUs","key":"standardESv5Family","used":0,"limit":10,"free":10},{"region":"eastus","name":"Standard DDSv4 Family vCPUs","key":"standardDDSv4Family","used":0,"limit":50,"free":50},{"region":"eastus","name":"Standard FSv2 Family vCPUs","key":"standardFSv2Family","used":0,"limit":100,"free":100},{"region":"eastus","name":"Standard NCADS A100 v4 Family vCPUs","key":"StandardNCADSA100v4Family","used":0,"limit":0,"free":0},{"region":"eastus","name":"Standard NVSv3 Family vCPUs","key":"standardNVSv3Family","used":0,"limit":24,"free":24},{"region":"eastus","name":"Standard HBrsv3 Family vCPUs","key":"standardHBrsv3Family","used":0,"limit":0,"free":0},{"region":"eastus","name":"Standard D Family vCPUs","key":"standardDFamily","used":0,"limit":10,"free":10},{"region":"eastus","name":"Standard MS Family vCPUs","key":"standardMSFamily","used":0,"limit":0,"free":0},{"region":"eastus","name":"Standard NC Family vCPUs","key":"standardNCFamily","used":0,"limit":0,"free":0},{"region":"eastus","name":"Availability Sets","key":"availabilitySets","used":3,"limit":2500,"free":2497}],"crg":[{"group":"crg-prod","rg":"rg1","name":"res-d4","region":"eastus","sku":"Standard_D4s_v5","reserved":5,"zones":"1"}]}
+{"subName":"Contoso-Prod","subId":"00000000-1111-2222-3333-444444444444","regions":["eastus","westus"],"regionInfo":[{"region":"eastus","skus":13,"error":""},{"region":"westus","skus":0,"error":""}],"filter":"","generated":"2026-11-02 17:05 UTC","redacted":false,"skus":[{"region":"eastus","sku":"Standard_D4s_v5","family":"standardDSv5Family","vcpus":4,"memGB":16,"maxDisks":"8","gpus":"","zones":"1 2 3","restrictedZones":"","status":"Available","reason":"","famUsed":12,"famLimit":20,"famFree":8,"regFree":60,"maxVMs":2,"canDeploy":"Yes","outcome":"Quota tight: only 2 VM(s) of this size fit","sev":"warn","cat":"quotatight","code":"OperationNotAllowed / QuotaExceeded","notes":""},{"region":"eastus","sku":"Standard_D2s_v5","family":"standardDSv5Family","vcpus":2,"memGB":8,"maxDisks":"","gpus":"","zones":"1 2 3","restrictedZones":"","status":"Available","reason":"","famUsed":12,"famLimit":20,"famFree":8,"regFree":60,"maxVMs":4,"canDeploy":"Yes","outcome":"Will deploy","sev":"ok","cat":"ok","code":"","notes":""},{"region":"eastus","sku":"Standard_D16s_v5","family":"standardDSv5Family","vcpus":16,"memGB":64,"maxDisks":"","gpus":"","zones":"1 2 3","restrictedZones":"","status":"Available","reason":"","famUsed":12,"famLimit":20,"famFree":8,"regFree":60,"maxVMs":0,"canDeploy":"No (quota)","outcome":"Will fail: family quota exceeded (needs 16 vCPUs, 8 free)","sev":"fail","cat":"famquota","code":"OperationNotAllowed / QuotaExceeded","notes":""},{"region":"eastus","sku":"Standard_E8s_v5","family":"standardESv5Family","vcpus":8,"memGB":64,"maxDisks":"","gpus":"","zones":"1 2 3","restrictedZones":"3","status":"PartiallyAvailable","reason":"NotAvailableForSubscription","famUsed":0,"famLimit":10,"famFree":10,"regFree":60,"maxVMs":1,"canDeploy":"Yes","outcome":"Zonal deploy fails in zone 3; use zones 1, 2","sev":"warn","cat":"zonal","code":"SkuNotAvailable","notes":"Quota tight: only 1 VM(s) of this size fit [OperationNotAllowed / QuotaExceeded]"},{"region":"eastus","sku":"Standard_D16ds_v4","family":"standardDDSv4Family","vcpus":16,"memGB":64,"maxDisks":"","gpus":"","zones":"1 2 3","restrictedZones":"1 2 3","status":"PartiallyAvailable","reason":"NotAvailableForSubscription","famUsed":0,"famLimit":50,"famFree":50,"regFree":60,"maxVMs":3,"canDeploy":"Yes","outcome":"Zonal deploy fails in all zones (1, 2, 3); a non-zonal deploy may still work","sev":"warn","cat":"zonal","code":"SkuNotAvailable","notes":""},{"region":"eastus","sku":"Standard_F72s_v2","family":"standardFSv2Family","vcpus":72,"memGB":144,"maxDisks":"","gpus":"","zones":"1 2 3","restrictedZones":"","status":"Available","reason":"","famUsed":0,"famLimit":100,"famFree":100,"regFree":60,"maxVMs":0,"canDeploy":"No (quota)","outcome":"Will fail: regional vCPU quota exceeded (needs 72, 60 free)","sev":"fail","cat":"regquota","code":"OperationNotAllowed / QuotaExceeded","notes":"Allocation risk: medium (very large size) [AllocationFailed / ZonalAllocationFailed]"},{"region":"eastus","sku":"Standard_B2s","family":"standardBSFamily","vcpus":2,"memGB":4,"maxDisks":"","gpus":"","zones":"1 2 3","restrictedZones":"","status":"Available","reason":"","famUsed":null,"famLimit":null,"famFree":null,"regFree":60,"maxVMs":30,"canDeploy":"Unknown","outcome":"Quota unknown: family standardBSFamily not in usage list","sev":"warn","cat":"quotaunknown","code":"","notes":"No accelerated networking (disable it on the NIC)"},{"region":"eastus","sku":"Standard_NC24ads_A100_v4","family":"StandardNCADSA100v4Family","vcpus":24,"memGB":220,"maxDisks":"","gpus":1,"zones":"1","restrictedZones":"","status":"Available","reason":"","famUsed":0,"famLimit":0,"famFree":0,"regFree":60,"maxVMs":0,"canDeploy":"No (quota)","outcome":"Will fail: family vCPU quota is 0 (request an increase)","sev":"fail","cat":"quota0","code":"OperationNotAllowed / QuotaExceeded","notes":"Allocation risk: high (GPU size, offered in only one zone) [AllocationFailed / ZonalAllocationFailed]; Only offered in zone 1; pinning another zone fails (SkuNotAvailable); Gen2 images only"},{"region":"eastus","sku":"Standard_NV12s_v3","family":"standardNVSv3Family","vcpus":12,"memGB":112,"maxDisks":"","gpus":1,"zones":"1 2","restrictedZones":"","status":"Available","reason":"","famUsed":0,"famLimit":24,"famFree":24,"regFree":60,"maxVMs":2,"canDeploy":"Yes","outcome":"Allocation risk: high (GPU size)","sev":"risk","cat":"alloc","code":"AllocationFailed / ZonalAllocationFailed","notes":"Quota tight: only 2 VM(s) of this size fit [OperationNotAllowed / QuotaExceeded]; Only offered in zones 1, 2; pinning another zone fails (SkuNotAvailable)"},{"region":"eastus","sku":"Standard_HB120rs_v3","family":"standardHBrsv3Family","vcpus":120,"memGB":448,"maxDisks":"","gpus":"","zones":"","restrictedZones":"","status":"Available","reason":"","famUsed":0,"famLimit":0,"famFree":0,"regFree":60,"maxVMs":0,"canDeploy":"No (quota)","outcome":"Will fail: family vCPU quota is 0 (request an increase)","sev":"fail","cat":"quota0","code":"OperationNotAllowed / QuotaExceeded","notes":"regional vCPU quota exceeded (needs 120, 60 free) [OperationNotAllowed / QuotaExceeded]; Allocation risk: high (HPC size, very large size) [AllocationFailed / ZonalAllocationFailed]; No availability-zone support here; deploy without a zone (pinning a zone fails: SkuNotAvailable)"},{"region":"eastus","sku":"Standard_D2","family":"standardDFamily","vcpus":2,"memGB":7,"maxDisks":"","gpus":"","zones":"","restrictedZones":"","status":"Available","reason":"","famUsed":0,"famLimit":10,"famFree":10,"regFree":60,"maxVMs":5,"canDeploy":"Yes","outcome":"Allocation risk: high (legacy size on older hardware)","sev":"risk","cat":"alloc","code":"AllocationFailed / ZonalAllocationFailed","notes":"No availability-zone support here; deploy without a zone (pinning a zone fails: SkuNotAvailable)"},{"region":"eastus","sku":"Standard_M128s","family":"standardMSFamily","vcpus":128,"memGB":2048,"maxDisks":"","gpus":"","zones":"1 2 3","restrictedZones":"","status":"NotAvailable","reason":"QuotaId","famUsed":0,"famLimit":0,"famFree":0,"regFree":60,"maxVMs":null,"canDeploy":"No (restricted)","outcome":"Will fail: SKU restricted for this subscription in this region (QuotaId)","sev":"fail","cat":"restricted","code":"SkuNotAvailable","notes":"family vCPU quota is 0 (request an increase) [OperationNotAllowed / QuotaExceeded]; regional vCPU quota exceeded (needs 128, 60 free) [OperationNotAllowed / QuotaExceeded]; Allocation risk: high (M-series (large memory), very large size) [AllocationFailed / ZonalAllocationFailed]"},{"region":"eastus","sku":"Standard_NC6","family":"standardNCFamily","vcpus":6,"memGB":0,"maxDisks":"","gpus":"","zones":"","restrictedZones":"","status":"NotAvailable","reason":"NotAvailableForSubscription","famUsed":0,"famLimit":0,"famFree":0,"regFree":60,"maxVMs":null,"canDeploy":"No (restricted)","outcome":"Will fail: SKU restricted for this subscription in this region (NotAvailableForSubscription)","sev":"fail","cat":"restricted","code":"SkuNotAvailable","notes":"family vCPU quota is 0 (request an increase) [OperationNotAllowed / QuotaExceeded]; Allocation risk: high (GPU size) [AllocationFailed / ZonalAllocationFailed]; No availability-zone support here; deploy without a zone (pinning a zone fails: SkuNotAvailable)"}],"quota":[{"region":"eastus","name":"Total Regional vCPUs","key":"cores","used":40,"limit":100,"free":60},{"region":"eastus","name":"Standard DSv5 Family vCPUs","key":"standardDSv5Family","used":12,"limit":20,"free":8},{"region":"eastus","name":"Standard ESv5 Family vCPUs","key":"standardESv5Family","used":0,"limit":10,"free":10},{"region":"eastus","name":"Standard DDSv4 Family vCPUs","key":"standardDDSv4Family","used":0,"limit":50,"free":50},{"region":"eastus","name":"Standard FSv2 Family vCPUs","key":"standardFSv2Family","used":0,"limit":100,"free":100},{"region":"eastus","name":"Standard NCADS A100 v4 Family vCPUs","key":"StandardNCADSA100v4Family","used":0,"limit":0,"free":0},{"region":"eastus","name":"Standard NVSv3 Family vCPUs","key":"standardNVSv3Family","used":0,"limit":24,"free":24},{"region":"eastus","name":"Standard HBrsv3 Family vCPUs","key":"standardHBrsv3Family","used":0,"limit":0,"free":0},{"region":"eastus","name":"Standard D Family vCPUs","key":"standardDFamily","used":0,"limit":10,"free":10},{"region":"eastus","name":"Standard MS Family vCPUs","key":"standardMSFamily","used":0,"limit":0,"free":0},{"region":"eastus","name":"Standard NC Family vCPUs","key":"standardNCFamily","used":0,"limit":0,"free":0},{"region":"eastus","name":"Availability Sets","key":"availabilitySets","used":3,"limit":2500,"free":2497}],"crg":[{"group":"crg-prod","rg":"rg1","name":"res-d4","region":"eastus","sku":"Standard_D4s_v5","reserved":5,"zones":"1"}]}
 ;
 const $=s=>document.querySelector(s), esc=v=>v==null?"":String(v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const MAX_ROWS=2000, SEV_RANK={fail:0,warn:1,risk:2,info:3,ok:4};

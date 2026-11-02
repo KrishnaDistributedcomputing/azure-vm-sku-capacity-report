@@ -35,7 +35,7 @@ done
 ./azure-vm-sku-report.sh -l eastus -r -o "$OUT/r.html" 2>/dev/null
 grep -q '444444444444' "$OUT/r.html" && ko "subscription ID not redacted" || ok "subscription ID redacted"
 
-# 5. Remediation content is present
+# 5. Remediation content is present with worked examples
 ./azure-vm-sku-report.sh -l eastus -o "$OUT/rem.html" 2>/dev/null
 grep -q 'id="rem-restricted"' "$OUT/rem.html" && ok "remediation section for restricted SKUs" || ko "remediation section missing"
 grep -q 'id="rem-quota0"' "$OUT/rem.html" && ok "remediation section for quota" || ko "quota remediation section missing"
@@ -49,5 +49,12 @@ grep -q 'exponential backoff' "$OUT/rem.html" && ok "exponential backoff mention
 grep -q 'MAX_ATTEMPTS' "$OUT/rem.html" && ok "Bash retry example present" || ko "Bash retry example missing"
 grep -q 'Start-AzVM' "$OUT/rem.html" && ok "PowerShell retry example present" || ko "PowerShell retry example missing"
 grep -q 'az monitor activity-log' "$OUT/rem.html" && ok "correlation ID capture guidance present" || ko "correlation ID guidance missing"
+grep -q 'Standard_M128s' "$OUT/rem.html" && ok "worked example: restricted SKU" || ko "worked example: restricted SKU missing"
+grep -q 'Standard_NC24ads_A100_v4' "$OUT/rem.html" && ok "worked example: GPU SKU" || ko "worked example: GPU SKU missing"
+grep -q 'Standard_D8s_v5' "$OUT/rem.html" && ok "worked example: D-series SKU" || ko "worked example: D-series SKU missing"
+grep -q 'Standard_E8s_v5' "$OUT/rem.html" && ok "worked example: E-series SKU" || ko "worked example: E-series SKU missing"
+grep -q 'Example error (AllocationFailed)' "$OUT/rem.html" && ok "worked example: AllocationFailed error message" || ko "worked example: AllocationFailed error missing"
+grep -q 'Expected output' "$OUT/rem.html" && ok "worked example: expected output" || ko "worked example: expected output missing"
+grep -q 'prod-rg' "$OUT/rem.html" && ok "worked example: realistic resource names" || ko "worked example: realistic resource names missing"
 
 echo "$pass passed, $fail failed"; (( fail == 0 ))
