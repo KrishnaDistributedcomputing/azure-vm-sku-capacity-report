@@ -227,7 +227,9 @@ explorer.exe azure-vm-sku-report.html    # WSL (opens with the Windows browser)
 start azure-vm-sku-report.html           # Git Bash
 ```
 The report is one HTML file with no external links to load, so it works offline. For a tour of every tab, see
-[SAMPLE_REPORT.md](SAMPLE_REPORT.md).
+[SAMPLE_REPORT.md](SAMPLE_REPORT.md). The **Troubleshooting & Help** tab includes step-by-step **remediation guides** for
+each predicted outcome—click a SKU's outcome pill to jump to the matching guide with commands filled in from that SKU's
+region, size, and family.
 
 **Keep it confidential.** A report contains the subscription ID and name, quota and usage, and reservation and
 resource-group names.

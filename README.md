@@ -14,7 +14,8 @@ which will fail, and why**. For every SKU in the regions you choose, it checks:
 
 It writes **one self-contained HTML file** that works offline and has no external dependencies. The file contains a
 sortable, filterable SKU table, a predicted outcome for each SKU with the Azure error code the customer would see, a vCPU
-quota view, capacity reservations, and a *Troubleshooting & Help* tab that explains how to fix each kind of failure.
+quota view, capacity reservations, and a *Troubleshooting & Help* tab that explains how to fix each kind of failure,
+including **step-by-step remediation guides** for each predicted outcome with commands filled in from the report.
 
 > The script is **read-only**. It never creates, changes or deletes Azure resources, and it doesn't change your default
 > `az` subscription.
@@ -210,8 +211,11 @@ Capacity reservation groups and reservations in the subscription: group, resourc
 count and zones. Check usage with `az capacity reservation show ... --instance-view`.
 
 ### Troubleshooting & Help tab
-How predictions work, a pre-deployment checklist with commands filled in from the report, and confirm/fix steps for each
-failure type (summarised [below](#troubleshooting-flow)), with links to Microsoft Learn.
+How predictions work, a pre-deployment checklist with commands filled in from the report, **step-by-step remediation
+guides** for each predicted outcome (SKU restricted, quota exceeded, zone issues, allocation failures, etc.), and
+confirm/fix steps for each failure type (summarised [below](#troubleshooting-flow)), with links to Microsoft Learn.
+Click a SKU row's **Predicted outcome** pill to jump to its remediation guide with commands pre-filled from that row's
+region, size, and family.
 
 ![Help tab](docs/screenshots/06-troubleshooting-help-tab.png)
 
@@ -358,6 +362,13 @@ the sample with a small tab-switching script injected. See the end of [docs/SAMP
 - Spot quota, dedicated hosts, Azure Policy and image compatibility aren't evaluated.
 
 ## Changelog
+
+### 1.3.0 (2026-11-02): remediation guide
+- Added **step-by-step remediation guides** in the Troubleshooting & Help tab for each predicted outcome (SKU restricted,
+  family/regional quota exceeded, zonal restrictions, allocation risk, etc.).
+- Clicking a SKU row's Predicted outcome now jumps to the matching remediation guide with commands pre-filled using that
+  row's region, size, and family.
+- Updated documentation to reference the remediation features.
 
 ### 1.2.0 (2026-11-02): security hardening
 - `-s` is passed with `--subscription` on every call. `az account set` is no longer used.

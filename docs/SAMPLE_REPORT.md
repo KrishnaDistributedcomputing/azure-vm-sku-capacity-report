@@ -175,16 +175,19 @@ reservation and resource-group names out of a shared report).
 
 The tab is built into the report, so it works offline. From the top:
 
-1. **How the predictions work:** the order of checks and the error code for each outcome (the same table as in the README).
-2. **Pre-deployment checklist:** commands to copy, already filled in with a size, region and subscription from the report:
+1. **Remediation guide:** Step-by-step fixes for each predicted outcome (SKU restricted, family/regional quota exceeded,
+   zonal restrictions, allocation risk, etc.). Click a SKU row's **Predicted outcome** pill to jump to the matching
+   remediation section with commands pre-filled using that row's region, size, and family.
+2. **How the predictions work:** the order of checks and the error code for each outcome (the same table as in the README).
+3. **Pre-deployment checklist:** commands to copy, already filled in with a size, region and subscription from the report:
    check the size is offered and unrestricted, check family and regional quota, then validate the deployment without
    creating anything (`az deployment group validate`). Any value that doesn't look like a normal Azure name becomes a
    placeholder such as `<vm-size>`.
-3. **One section per failure type:** SKU restricted (`SkuNotAvailable`), quota (`OperationNotAllowed` /
+4. **One section per failure type:** SKU restricted (`SkuNotAvailable`), quota (`OperationNotAllowed` /
    `QuotaExceeded`), zones, allocation failures (`AllocationFailed`, `ZonalAllocationFailed`, `Overconstrained…`),
    capacity reservations, Spot, and other checks (Gen1/Gen2 images, accelerated networking, disks). Each section has a
    **Confirm** step (a command that proves the cause) and a **Fix** step (portal path or CLI).
-4. **Docs:** links to the Microsoft Learn pages.
+5. **Docs:** links to the Microsoft Learn pages.
 
 The whole tab in one image: [screenshots/07-troubleshooting-help-full.png](screenshots/07-troubleshooting-help-full.png).
 

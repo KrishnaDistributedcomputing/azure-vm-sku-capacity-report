@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # azure-vm-sku-report.sh
-# Version: 1.2.0
+# Version: 1.3.0
 # One script: finds which Azure VM SKUs a subscription can deploy, checks vCPU quota,
 # predicts which SKUs will fail (and with which Azure error code), lists capacity
 # reservations, and writes a self-contained, searchable HTML report with a help tab.
@@ -323,7 +323,7 @@ button.dl{border:1px solid var(--blue);color:var(--blue);background:#fff;padding
 
 <section id="help" class="hide">
 <p class="toc"><b>Jump to:</b>
-<a href="#h-how">How predictions work</a><a href="#h-check">Pre-deployment checklist</a><a href="#h-restricted">SKU restricted</a><a href="#h-quota">Quota</a>
+<a href="#h-remediation">Remediation guide</a><a href="#h-how">How predictions work</a><a href="#h-check">Pre-deployment checklist</a><a href="#h-restricted">SKU restricted</a><a href="#h-quota">Quota</a>
 <a href="#h-zonal">Zones</a><a href="#h-alloc">Allocation failures</a><a href="#h-crg">Capacity reservations</a><a href="#h-spot">Spot</a><a href="#h-other">Other checks</a><a href="#h-docs">Docs</a></p>
 
 <h2 id="h-how">How the predictions work</h2>
@@ -408,6 +408,68 @@ button.dl{border:1px solid var(--blue);color:var(--blue);background:#fff;padding
 <li>This report is a point-in-time snapshot. Restrictions and quota change, so re-run it before large deployments.</li>
 </ul>
 
+<h2 id="h-remediation">Remediation: step-by-step fixes per outcome</h2>
+<p>Click the <b>Predicted outcome</b> pill for a SKU to jump to its remediation steps, or expand a category below. Commands are filled in from the SKU table where practical; substitute <code>&lt;region&gt;</code>, <code>&lt;size&gt;</code> and <code>&lt;family&gt;</code> when needed.</p>
+
+<h3 id="rem-restricted">1. SKU restricted (SkuNotAvailable / InvalidTemplateDeployment)</h3>
+<ol>
+<li>Confirm: <code>az vm list-skus -l &lt;region&gt; --size &lt;size&gt; --all -o table</code> and read the Restrictions column.</li>
+<li>NotAvailableForSubscription: pick a sibling size in the same family (e.g. v5 instead of v4) or a region where Restrictions is empty.</li>
+<li>Need that exact size/region: open an Azure support request, type <b>Service and subscription limits (quotas)</b>, and ask to enable the SKU in that region.</li>
+<li>QuotaId: the subscription offer type (free trial, MSDN/Visual Studio) can't use the size. Pick an allowed size or deploy from a Pay-As-You-Go/EA subscription.</li>
+<li>ARM/Bicep: look inside InvalidTemplateDeployment for the inner SkuNotAvailable; parameterize the VM size so it can be swapped without editing the template.</li>
+</ol>
+
+<h3 id="rem-quota0">2. Family quota is 0 / exceeded (QuotaExceeded / OperationNotAllowed)</h3>
+<ol>
+<li><code>az vm list-usage -l &lt;region&gt; -o table</code>; find the family row (e.g. "Standard DSv5 Family vCPUs").</li>
+<li>Needed = current usage + (SKU vCPUs × VM count).</li>
+<li>Portal &gt; <b>Quotas</b> &gt; <b>Compute</b>, filter region + family, <b>New quota request</b>. Small increases are often auto-approved in minutes.</li>
+<li>Meanwhile free quota by deallocating/deleting unused VMs in that family (Stopped but not deallocated still holds cores) or use a family with headroom.</li>
+</ol>
+
+<h3 id="rem-regquota">3. Regional quota exceeded (Total Regional Cores)</h3>
+<ol>
+<li>In the same list-usage output check "Total Regional vCPUs".</li>
+<li>Request an increase on Total Regional vCPUs on the same Quotas page; it must be at least as high as the family request since both must fit.</li>
+<li>Meanwhile deallocate idle VMs anywhere in that region or deploy to another region.</li>
+<li>Spot VMs use "Total Regional Low-priority vCPUs", a separate limit.</li>
+</ol>
+
+<h3 id="rem-zonal">4. Zonal deploy fails in zone X (SkuNotAvailable ... zones 'N')</h3>
+<ol>
+<li><code>az vm list-skus -l &lt;region&gt; --size &lt;size&gt; --zone -o table</code> to see which zones offer it.</li>
+<li>Change the deployment's <code>zones</code> to an allowed zone, or remove the zone pin if zonal placement isn't required.</li>
+<li>If you need all 3 zones for HA, choose a size offered in every zone.</li>
+<li>Scale sets: set <code>zones</code> only to supported zones; enable zone balancing only if every zone supports the size.</li>
+</ol>
+
+<h3 id="rem-zonepinned">5. Only offered in some zones / no zone support</h3>
+<ol>
+<li>Don't hard-code a zone; read supported zones from list-skus and parameterize.</li>
+<li>No zone support: deploy regionally and get resilience from an availability set or a second region.</li>
+<li>If zonal resilience is required, pick a size available in all zones.</li>
+</ol>
+
+<h3 id="rem-quotaunknown">6. Quota unknown / tight</h3>
+<ol>
+<li>Family missing from list-usage usually means limit 0: treat as case 2 and request quota before deploying.</li>
+<li>If only 1-2 VMs fit, request quota for peak scale + ~20% so autoscale doesn't fail.</li>
+<li>Create quota alerts (Portal &gt; <b>Quotas</b> &gt; <b>Create alert rule</b>) at ~80% usage.</li>
+</ol>
+
+<h3 id="rem-alloc">7. Allocation risk (AllocationFailed, ZonalAllocationFailed, OverconstrainedAllocationRequest, OverconstrainedZonalAllocationRequest)</h3>
+<ol>
+<li>Retry after a short wait; capacity changes often.</li>
+<li>Relax constraints: remove zone pin, proximity placement group, accelerated networking requirement, or availability-set tie.</li>
+<li>Try a nearby newer-generation size (legacy Av1/Dv1/DSv1/G have the least capacity) or another region.</li>
+<li>VM in an availability set fails: deallocate every VM in the set, then start them together so Azure can move the set to a cluster with room.</li>
+<li>GPU/HPC/M-series/64+ vCPU sizes you can't afford to fail: buy an On-Demand Capacity Reservation.</li>
+</ol>
+
+<h3 id="rem-ok">8. Will deploy</h3>
+<p>No action needed. Azure doesn't publish free capacity, so keep the retry + fallback-size plan from case 7 in your pipeline anyway.</p>
+
 <h2 id="h-docs">Microsoft Learn docs</h2>
 <ul>
 <li><a href="https://learn.microsoft.com/en-us/azure/azure-resource-manager/troubleshooting/error-sku-not-available" target="_blank" rel="noopener">Resolve errors for SKU not available</a></li>
@@ -441,8 +503,8 @@ const $=s=>document.querySelector(s), esc=v=>v==null?"":String(v).replace(/[&<>"
 const MAX_ROWS=2000, SEV_RANK={fail:0,warn:1,risk:2,info:3,ok:4};
 const CAT_LABEL={restricted:"SKU restricted",quota0:"Family quota is 0",famquota:"Family quota exceeded",regquota:"Regional quota exceeded",
  zonal:"Zone restricted",zonepinned:"Only in some zones",nozones:"No zone support",quotaunknown:"Quota unknown",alloc:"Allocation risk",quotatight:"Quota tight",ok:"Will deploy"};
-const CAT_HELP={restricted:"h-restricted",quota0:"h-quota",famquota:"h-quota",regquota:"h-quota",zonal:"h-zonal",zonepinned:"h-zonal",nozones:"h-zonal",
- quotaunknown:"h-quota",alloc:"h-alloc",quotatight:"h-quota",ok:"h-alloc"};
+const CAT_HELP={restricted:"rem-restricted",quota0:"rem-quota0",famquota:"rem-quota0",regquota:"rem-regquota",zonal:"rem-zonal",zonepinned:"rem-zonepinned",nozones:"rem-zonepinned",
+ quotaunknown:"rem-quotaunknown",alloc:"rem-alloc",quotatight:"rem-quotaunknown",ok:"rem-ok"};
 $("#meta").textContent=`Subscription: ${D.subName} (${D.subId}) · Regions: ${D.regions.join(", ")}${D.filter?" · Filter: "+D.filter:""} · Generated ${D.generated}`;
 const S=D.skus.map(s=>({...s,sevRank:SEV_RANK[s.sev]??9})), cnt=f=>S.filter(f).length;
 const nFail=cnt(s=>s.sev=="fail");
@@ -544,8 +606,18 @@ az capacity reservation create -g <rg> -c crg-prod -n res-${K.toLowerCase().repl
 az vm create -g <rg> -n <vm> --image Ubuntu2204 --size ${K} --zone 1 \\
   --capacity-reservation-group $(az capacity reservation group show -g <rg> -n crg-prod --query id -o tsv)`);})();
 renderSkus(); renderQuota();
+// Fill remediation commands when a SKU row is clicked
+document.querySelector("#t tbody").addEventListener("click",e=>{
+ const row=e.target.closest("tr");if(!row)return;const idx=[...row.parentNode.children].indexOf(row);
+ if(idx<0||idx>=shown.length)return;const s=shown[idx];
+ const R=esc(s.region),K=esc(s.sku),F=esc(s.family);
+ document.querySelectorAll("#help code").forEach(c=>{
+  let t=c.textContent.replace(/&lt;region&gt;/g,R).replace(/&lt;size&gt;/g,K).replace(/&lt;family&gt;/g,F);
+  c.textContent=t.replace(/&lt;/g,"<").replace(/&gt;/g,">");
+ });
+});
 if(location.hash=="#tab-help"){show("help");}
-else if(location.hash.startsWith("#h-")){show("help");const t=document.getElementById(location.hash.slice(1));if(t)setTimeout(()=>t.scrollIntoView(),50);}
+else if(location.hash.startsWith("#h-")||location.hash.startsWith("#rem-")){show("help");const t=document.getElementById(location.hash.slice(1));if(t)setTimeout(()=>t.scrollIntoView(),50);}
 HTML_TAIL
 } > "$TMP/script.js"
 

@@ -35,4 +35,11 @@ done
 ./azure-vm-sku-report.sh -l eastus -r -o "$OUT/r.html" 2>/dev/null
 grep -q '444444444444' "$OUT/r.html" && ko "subscription ID not redacted" || ok "subscription ID redacted"
 
+# 5. Remediation content is present
+./azure-vm-sku-report.sh -l eastus -o "$OUT/rem.html" 2>/dev/null
+grep -q 'id="rem-restricted"' "$OUT/rem.html" && ok "remediation section for restricted SKUs" || ko "remediation section missing"
+grep -q 'id="rem-quota0"' "$OUT/rem.html" && ok "remediation section for quota" || ko "quota remediation section missing"
+grep -q 'h-remediation' "$OUT/rem.html" && ok "remediation guide in help tab" || ko "remediation guide missing"
+grep -q 'Remediation: step-by-step fixes' "$OUT/rem.html" && ok "remediation heading present" || ko "remediation heading missing"
+
 echo "$pass passed, $fail failed"; (( fail == 0 ))
