@@ -16,7 +16,7 @@ quota view, capacity reservations, and a *Troubleshooting & Help* tab that expla
 > The script is **read-only**. It never creates, changes or deletes Azure resources, and it doesn't change your default
 > `az` subscription.
 
-![SKU tab](docs/report-skus-tab.png)
+![Report summary](docs/screenshots/01-header-summary.png)
 
 ---
 
@@ -25,6 +25,7 @@ quota view, capacity reservations, and a *Troubleshooting & Help* tab that expla
 - [Required permissions](#required-permissions)
 - [Install](#install)
 - [Usage](#usage)
+- [Sample report](#sample-report)
 - [Viewing the report](#viewing-the-report)
 - [The report, tab by tab](#the-report-tab-by-tab)
 - [How predictions are computed](#how-predictions-are-computed)
@@ -134,6 +135,15 @@ Checking capacity reservations ...
 Report written to azure-vm-sku-report.html (13 SKUs, 6 predicted to fail)
 ```
 
+## Sample report
+
+[`docs/sample-report.html`](docs/sample-report.html) is a complete report built from **mock data** (no real subscription).
+GitHub doesn't render HTML, so download the raw file and open it in a browser. The
+**[sample report walkthrough](docs/SAMPLE_REPORT.md)** explains every part with screenshots: summary cards, predicted
+outcomes, filters, quota, reservations and the help tab.
+
+![VM SKUs tab with predicted outcomes](docs/screenshots/02-skus-predicted-outcomes.png)
+
 ## Viewing the report
 
 The HTML file is self-contained and works offline in any modern browser.
@@ -149,7 +159,7 @@ sed -n '/^const D =$/,/^;$/p' azure-vm-sku-report.html | sed '1d;$d' \
  | jq -r '.skus[] | [.region,.sku,.vcpus,.memGB,.outcome,.code] | @tsv' | column -t -s $'\t' | less -S
 ```
 
-A sample report built from **mock data** is in [`docs/sample-report.html`](docs/sample-report.html).
+A sample report built from **mock data** is in [`docs/sample-report.html`](docs/sample-report.html) (see [Sample report](#sample-report)).
 
 ## The report, tab by tab
 
@@ -197,9 +207,9 @@ count and zones. Check usage with `az capacity reservation show ... --instance-v
 How predictions work, a pre-deployment checklist with commands filled in from the report, and confirm/fix steps for each
 failure type (summarised [below](#troubleshooting-flow)), with links to Microsoft Learn.
 
-![Help tab](docs/report-help-tab.png)
+![Help tab](docs/screenshots/06-troubleshooting-help-tab.png)
 
-Full help tab: [docs/report-help-tab-full.png](docs/report-help-tab-full.png)
+Full help tab: [docs/screenshots/07-troubleshooting-help-full.png](docs/screenshots/07-troubleshooting-help-full.png). Walkthrough of every tab: [docs/SAMPLE_REPORT.md](docs/SAMPLE_REPORT.md).
 
 ## How predictions are computed
 
@@ -322,9 +332,8 @@ mkdir -p /tmp/mockbin && ln -sf "$PWD/test/mock-az" /tmp/mockbin/az
 PATH=/tmp/mockbin:$PATH ./azure-vm-sku-report.sh -l "eastus westus" -o /tmp/mock.html
 ```
 
-The screenshots in `docs/` were made with headless Chrome:
-`google-chrome --headless --no-sandbox --window-size=1400,900 --screenshot=... docs/sample-report.html`
-(add `#tab-help` to the URL to open the help tab).
+The screenshots in `docs/screenshots/` were taken with headless Chrome (`--window-size=1400,...`) of temporary copies of
+the sample with a small tab-switching script injected. See the end of [docs/SAMPLE_REPORT.md](docs/SAMPLE_REPORT.md).
 
 ## Known limitations
 
@@ -353,6 +362,7 @@ The screenshots in `docs/` were made with headless Chrome:
 - CSV formula-injection protection and CRLF line endings.
 - Input validation for `-l`, `-s`, `-f` and `-o`. Region and reservation lists no longer glob or word-split.
 - Copy-paste commands in the help tab use only safe characters. Temp-dir cleanup on INT/TERM.
+- Added `docs/SAMPLE_REPORT.md` (sample report walkthrough) and a new screenshot set in `docs/screenshots/`.
 - Added `test/run-tests.sh`, plus malicious-data and call-logging modes in `test/mock-az`.
 
 ### 1.1.0 (2026-11-02): predictions and help
