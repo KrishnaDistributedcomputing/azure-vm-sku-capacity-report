@@ -14,7 +14,8 @@ which will fail, and why**. For every SKU in the regions you choose, it checks:
 
 It writes **one self-contained HTML file** that works offline and has no external dependencies. The file contains a
 sortable, filterable SKU table, a predicted outcome for each SKU with the Azure error code the customer would see, a vCPU
-quota view, capacity reservations, and a *Troubleshooting & Help* tab that explains how to fix each kind of failure.
+quota view, capacity reservations, and a *Troubleshooting & Help* tab that explains how to fix each kind of failure,
+including **step-by-step remediation guides** for each predicted outcome with commands filled in from the report.
 
 > The script is **read-only**. It never creates, changes or deletes Azure resources, and it doesn't change your default
 > `az` subscription.
@@ -210,8 +211,11 @@ Capacity reservation groups and reservations in the subscription: group, resourc
 count and zones. Check usage with `az capacity reservation show ... --instance-view`.
 
 ### Troubleshooting & Help tab
-How predictions work, a pre-deployment checklist with commands filled in from the report, and confirm/fix steps for each
-failure type (summarised [below](#troubleshooting-flow)), with links to Microsoft Learn.
+How predictions work, a pre-deployment checklist with commands filled in from the report, **step-by-step remediation
+guides** for each predicted outcome (SKU restricted, quota exceeded, zone issues, allocation failures, etc.), and
+confirm/fix steps for each failure type (summarised [below](#troubleshooting-flow)), with links to Microsoft Learn.
+Click a SKU row's **Predicted outcome** pill to jump to its remediation guide with commands pre-filled from that row's
+region, size, and family.
 
 ![Help tab](docs/screenshots/06-troubleshooting-help-tab.png)
 
@@ -358,6 +362,40 @@ the sample with a small tab-switching script injected. See the end of [docs/SAMP
 - Spot quota, dedicated hosts, Azure Policy and image compatibility aren't evaluated.
 
 ## Changelog
+
+### 1.3.2 (2026-11-02): worked examples throughout remediation guide
+- Added **16 concrete worked examples** throughout all 8 remediation sections with realistic SKU names, regions, zones,
+  and resource names.
+- Each example includes: the specific error message as Azure returns it (code + message text), exact diagnostic commands
+  with real-looking values, expected output snippets, and complete fix/retry commands with those values filled in.
+- Expanded AllocationFailed section with detailed worked examples: `Standard_D8s_v5` in `eastus` zone 2 with full retry
+  output showing backoff timing, `Standard_NC24ads_A100_v4` GPU VM with PowerShell retry, zone fallback example showing
+  output at each step, availability set scenario with `web-vm-04`, resize example with `db-vm-01`, fallback ladder with
+  multiple alternatives, pipeline script with parameterized fallback sizes, and correlation ID capture with example output.
+- Added realistic examples for: `Standard_M128s` restricted SKU, `Standard_NC24ads_A100_v4` quota 0, `Standard_F72s_v2`
+  regional quota, `Standard_E8s_v5` zonal restrictions, `Standard_D16ds_v4` zone-pinned, `Standard_HB120rs_v3` quota
+  unknown, and `Standard_D2s_v5` will deploy.
+- All examples clearly labeled with "Example:" prefix and use realistic resource group names (prod-rg, ml-rg, db-rg).
+- Regenerated docs/sample-report.html (725 lines, 16 examples).
+- Added 7 new tests verifying worked examples are present (32 tests total, all pass).
+- Bumped version to 1.3.2.
+
+### 1.3.1 (2026-11-02): expanded allocation failure remediation
+- Significantly expanded the **Allocation risk** remediation section with detailed guidance on AllocationFailed and
+  ZonalAllocationFailed errors.
+- Added comprehensive subsections: understanding allocation errors (vs quota/overconstrained errors), when they occur,
+  proper retry strategies with exponential backoff and jitter, concrete Bash and PowerShell retry examples, fallback
+  ladder (zone/size/region), specific scenarios (availability sets, proximity placement groups, resize), and pipeline/IaC
+  guidance with correlation ID capture using `az monitor activity-log`.
+- Included examples for detecting allocation errors in scripts, retrying across zones, and capturing diagnostic data for
+  support cases.
+
+### 1.3.0 (2026-11-02): remediation guide
+- Added **step-by-step remediation guides** in the Troubleshooting & Help tab for each predicted outcome (SKU restricted,
+  family/regional quota exceeded, zonal restrictions, allocation risk, etc.).
+- Clicking a SKU row's Predicted outcome now jumps to the matching remediation guide with commands pre-filled using that
+  row's region, size, and family.
+- Updated documentation to reference the remediation features.
 
 ### 1.2.0 (2026-11-02): security hardening
 - `-s` is passed with `--subscription` on every call. `az account set` is no longer used.
