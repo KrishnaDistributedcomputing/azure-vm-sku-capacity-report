@@ -363,6 +363,16 @@ the sample with a small tab-switching script injected. See the end of [docs/SAMP
 
 ## Changelog
 
+### 1.3.1 (2026-11-02): expanded allocation failure remediation
+- Significantly expanded the **Allocation risk** remediation section with detailed guidance on AllocationFailed and
+  ZonalAllocationFailed errors.
+- Added comprehensive subsections: understanding allocation errors (vs quota/overconstrained errors), when they occur,
+  proper retry strategies with exponential backoff and jitter, concrete Bash and PowerShell retry examples, fallback
+  ladder (zone/size/region), specific scenarios (availability sets, proximity placement groups, resize), and pipeline/IaC
+  guidance with correlation ID capture using `az monitor activity-log`.
+- Included examples for detecting allocation errors in scripts, retrying across zones, and capturing diagnostic data for
+  support cases.
+
 ### 1.3.0 (2026-11-02): remediation guide
 - Added **step-by-step remediation guides** in the Troubleshooting & Help tab for each predicted outcome (SKU restricted,
   family/regional quota exceeded, zonal restrictions, allocation risk, etc.).

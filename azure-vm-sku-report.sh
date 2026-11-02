@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # azure-vm-sku-report.sh
-# Version: 1.3.0
+# Version: 1.3.1
 # One script: finds which Azure VM SKUs a subscription can deploy, checks vCPU quota,
 # predicts which SKUs will fail (and with which Azure error code), lists capacity
 # reservations, and writes a self-contained, searchable HTML report with a help tab.
@@ -458,14 +458,127 @@ button.dl{border:1px solid var(--blue);color:var(--blue);background:#fff;padding
 <li>Create quota alerts (Portal &gt; <b>Quotas</b> &gt; <b>Create alert rule</b>) at ~80% usage.</li>
 </ol>
 
-<h3 id="rem-alloc">7. Allocation risk (AllocationFailed, ZonalAllocationFailed, OverconstrainedAllocationRequest, OverconstrainedZonalAllocationRequest)</h3>
+<h3 id="rem-alloc">7. Allocation failures: no capacity right now</h3>
+
+<h4 id="rem-alloc-errors">Understanding allocation errors</h4>
+<p><b>AllocationFailed</b> and <b>ZonalAllocationFailed</b> mean Azure has no free hardware for that size in the target region, zone, or datacenter cluster <b>right now</b>. Your request is valid, quota is fine, and the size isn't restricted—there's just no capacity available at this moment. Capacity frees up constantly as other customers deallocate VMs.</p>
+
+<p><b>When it happens:</b></p>
+<ul>
+<li>Creating a new VM (<code>az vm create</code>)</li>
+<li>Starting a deallocated VM (<code>az vm start</code>)</li>
+<li>Resizing an existing VM (<code>az vm resize</code>)</li>
+<li>Scaling out a VM scale set (<code>az vmss scale</code>)</li>
+<li>Adding a VM to an availability set or proximity placement group (must fit on the cluster that already hosts the set/group)</li>
+</ul>
+
+<p><b>How it differs from other errors:</b></p>
+<table><tbody>
+<tr><td><code>AllocationFailed</code> / <code>ZonalAllocationFailed</code></td><td>No free capacity <b>right now</b>. Retry later or try another zone/size/region.</td></tr>
+<tr><td><code>OperationNotAllowed</code> / <code>QuotaExceeded</code></td><td>vCPU quota limit. Fix: request a quota increase.</td></tr>
+<tr><td><code>OverconstrainedAllocationRequest</code> / <code>OverconstrainedZonalAllocationRequest</code></td><td>Too many constraints (zone + availability set + proximity placement group + accelerated networking + UltraSSD). Relax at least one.</td></tr>
+</tbody></table>
+
+<h4 id="rem-alloc-retry">How to retry properly</h4>
+<p><b>Use exponential backoff with jitter</b> (1, 2, 4, 8, 15 min caps). Capacity changes as other customers deallocate VMs, so retries often succeed within minutes.</p>
+
+<p><b>Bash example (create VM with retry):</b></p>
+<pre>#!/bin/bash
+MAX_ATTEMPTS=5
+DELAYS=(60 120 240 480 900)  # 1, 2, 4, 8, 15 min in seconds
+RG="my-rg"; VM="my-vm"; SIZE="Standard_D4s_v5"; REGION="eastus"; ZONE="1"
+
+for i in $(seq 0 $((MAX_ATTEMPTS - 1))); do
+  echo "Attempt $((i + 1))/$MAX_ATTEMPTS: creating VM $VM..."
+  if az vm create -g "$RG" -n "$VM" --image Ubuntu2204 --size "$SIZE" -l "$REGION" --zone "$ZONE" 2&gt;&amp;1 | tee /tmp/vm-create.log; then
+    echo "Success!"; exit 0
+  fi
+  if grep -qE '(AllocationFailed|ZonalAllocationFailed)' /tmp/vm-create.log; then
+    if [ $i -lt $((MAX_ATTEMPTS - 1)) ]; then
+      DELAY=${DELAYS[$i]}; JITTER=$((RANDOM % 30))  # add 0-30s jitter
+      echo "AllocationFailed detected. Retrying in $((DELAY + JITTER))s..."
+      sleep $((DELAY + JITTER))
+    else
+      echo "All retries exhausted. Trying fallback strategies..."; exit 1
+    fi
+  else
+    echo "Different error (not allocation). Exiting."; exit 1
+  fi
+done</pre>
+
+<p><b>PowerShell example (start deallocated VM with retry):</b></p>
+<pre>$MaxAttempts = 5
+$Delays = @(60, 120, 240, 480, 900)
+$RG = "my-rg"; $VM = "my-vm"
+
+for ($i = 0; $i -lt $MaxAttempts; $i++) {
+  Write-Host "Attempt $($i + 1)/$MaxAttempts : starting VM $VM..."
+  try {
+    Start-AzVM -ResourceGroupName $RG -Name $VM -ErrorAction Stop
+    Write-Host "Success!"; exit 0
+  } catch {
+    if ($_.Exception.Message -match 'AllocationFailed|ZonalAllocationFailed') {
+      if ($i -lt ($MaxAttempts - 1)) {
+        $Delay = $Delays[$i]; $Jitter = Get-Random -Maximum 30
+        Write-Host "AllocationFailed detected. Retrying in $($Delay + $Jitter)s..."
+        Start-Sleep -Seconds ($Delay + $Jitter)
+      } else {
+        Write-Host "All retries exhausted."; exit 1
+      }
+    } else {
+      Write-Host "Different error: $($_.Exception.Message)"; exit 1
+    }
+  }
+}</pre>
+
+<p><b>For ZonalAllocationFailed:</b> retry in another zone, then without a zone pin:</p>
+<pre># Try zone 2, then zone 3, then regional (no zone)
+for ZONE in 2 3 ""; do
+  echo "Trying ${ZONE:-regional}..."
+  ZONE_ARG=""; [ -n "$ZONE" ] &amp;&amp; ZONE_ARG="--zone $ZONE"
+  if az vm create -g "$RG" -n "$VM" --image Ubuntu2204 --size "$SIZE" -l "$REGION" $ZONE_ARG; then
+    echo "Success in ${ZONE:-regional}!"; exit 0
+  fi
+done</pre>
+
+<h4 id="rem-alloc-specific">Specific scenarios</h4>
+
+<p><b>Availability set:</b> a VM must fit on the cluster that already hosts the set. If it fails, deallocate <b>all</b> VMs in the set, then start them together so Azure can move the set to a cluster with room.</p>
+<pre>az vm deallocate --ids $(az vm list -g &lt;rg&gt; --query "[?availabilitySet.id!=null].id" -o tsv)
+az vm start --ids $(az vm list -g &lt;rg&gt; --query "[?availabilitySet.id!=null].id" -o tsv)</pre>
+
+<p><b>Proximity placement group:</b> same principle. Deallocate all VMs in the group, then start the most restrictive size first (e.g. GPU or M-series).</p>
+
+<p><b>Resizing an existing VM:</b> deallocate it first so it can move to a different cluster, then resize:</p>
+<pre>az vm deallocate -g &lt;rg&gt; -n &lt;vm&gt;
+az vm resize -g &lt;rg&gt; -n &lt;vm&gt; --size &lt;new-size&gt;
+az vm start -g &lt;rg&gt; -n &lt;vm&gt;</pre>
+
+<h4 id="rem-alloc-fallback">Fallback ladder after retries fail</h4>
 <ol>
-<li>Retry after a short wait; capacity changes often.</li>
-<li>Relax constraints: remove zone pin, proximity placement group, accelerated networking requirement, or availability-set tie.</li>
-<li>Try a nearby newer-generation size (legacy Av1/Dv1/DSv1/G have the least capacity) or another region.</li>
-<li>VM in an availability set fails: deallocate every VM in the set, then start them together so Azure can move the set to a cluster with room.</li>
-<li>GPU/HPC/M-series/64+ vCPU sizes you can't afford to fail: buy an On-Demand Capacity Reservation.</li>
+<li><b>Same size, another zone</b> (if zonal): <code>--zone 2</code> or <code>--zone 3</code></li>
+<li><b>Remove zone pin</b>: deploy regionally (omit <code>--zone</code>)</li>
+<li><b>Sibling or newer-generation size</b>: e.g. v5 instead of v3, or an AMD variant (<code>_a</code> suffix). Check the error message for suggested sizes. List alternatives: <code>az vm list-skus -l &lt;region&gt; --size &lt;family-prefix&gt; -o table</code></li>
+<li><b>Nearby region</b>: try a paired region or another region in the same geography</li>
+<li><b>On-Demand Capacity Reservation</b> for critical sizes (GPU, HPC, M-series, 64+ vCPUs): guarantees capacity but is billed whether used or not. Create it before you need it:
+<pre>az capacity reservation group create -g &lt;rg&gt; -n crg-prod -l &lt;region&gt; --zones 1 2 3
+az capacity reservation create -g &lt;rg&gt; -c crg-prod -n res-&lt;size&gt; --sku &lt;size&gt; --capacity &lt;count&gt; --zone 1</pre></li>
 </ol>
+
+<p><b>Spot VMs are not a fix.</b> Spot runs on spare capacity and is evicted first when a region is short. Use Spot for interruptible workloads, not to work around AllocationFailed.</p>
+
+<h4 id="rem-alloc-pipeline">Guidance for pipelines and IaC</h4>
+<ul>
+<li><b>Parameterize size and zone</b> in templates so you can swap them without editing. Store a fallback size list.</li>
+<li><b>Add retry policies</b> with exponential backoff in your deployment scripts (examples above).</li>
+<li><b>Capture the correlation ID</b> from the error for a support case if failures persist. Find it in the Azure CLI error output (<code>Correlation ID: ...</code>) or query the activity log:
+<pre>az monitor activity-log list --resource-group &lt;rg&gt; --caller &lt;your-email&gt; --status Failed \
+  --start-time $(date -u -d '1 hour ago' '+%Y-%m-%dT%H:%M:%SZ') --query "[?contains(status.value,'Failed')].{Time:eventTimestamp,Operation:operationName.localizedValue,Status:status.localizedValue,CorrelationId:correlationId}" -o table</pre>
+Include the correlation ID and the full error text when opening a support request.</li>
+<li><b>Monitor allocation failures</b> as a metric. Log every failure with the size, region, zone and timestamp so you can spot patterns.</li>
+</ul>
+
+<p><b>Legacy sizes</b> (Av1, Dv1, DSv1, D15_v2, G-series) run on older hardware that is shrinking. Move to current equivalents (Av2, Dv3/Dv5, etc.) for better availability.</p>
 
 <h3 id="rem-ok">8. Will deploy</h3>
 <p>No action needed. Azure doesn't publish free capacity, so keep the retry + fallback-size plan from case 7 in your pipeline anyway.</p>
